@@ -77,6 +77,33 @@ const WKINDS = { "great-sword":"Spadone","long-sword":"Katana","sword-shield":"S
   "hammer":"Martello","hunting-horn":"Corno da caccia","lance":"Lancia","gunlance":"Lanciacannone","switch-axe":"Spadascia",
   "charge-blade":"Spada caricata","insect-glaive":"Falcione insetto","bow":"Arco","light-bowgun":"Balestra leggera","heavy-bowgun":"Balestra pesante" };
 
+/* ---- elementi/stati per la modifica manuale delle armi Artian ------------ */
+const WDMG = [["fire","Fuoco"],["water","Acqua"],["thunder","Tuono"],["ice","Ghiaccio"],["dragon","Drago"],
+  ["poison","Veleno"],["paralysis","Paralisi"],["sleep","Sonno"],["blast","Esplosione"]];
+const DMG_LABEL = Object.fromEntries(WDMG);
+const STATUS_TYPES = new Set(["poison","paralysis","sleep","blast"]);
+const codeFromLabel = (lbl) => { for (const [c, l] of WDMG) if (l === lbl || c === lbl) return c; return "none"; };
+const parseSlots = (str) => (str || "").split(/[^0-9]+/).filter(Boolean).map(Number).filter(n => n >= 1 && n <= 3);
+
+/* Applica al pezzo-arma di base gli override manuali (stat + abilità Artian).
+   Non muta l'originale: restituisce una copia con i valori effettivi. */
+function effectiveWeapon(w, wmods) {
+  if (!w) return w;
+  const m = wmods || {};
+  const out = { ...w };
+  if (m.raw != null && m.raw !== "") out.raw = Number(m.raw);
+  if (m.aff != null && m.aff !== "") out.aff = Number(m.aff);
+  if (m.slots != null) out.slots = m.slots;
+  if (m.dmgType !== undefined) {
+    const val = Number(m.dmgVal) || 0;
+    if (m.dmgType === "none" || m.dmgType === "") { out.el = null; out.st = null; }
+    else if (STATUS_TYPES.has(m.dmgType)) { out.st = [DMG_LABEL[m.dmgType] || m.dmgType, val]; out.el = null; }
+    else { out.el = [DMG_LABEL[m.dmgType] || m.dmgType, val]; out.st = null; }
+  }
+  out.skills = [...(w.skills || []), ...((m.skills) || [])];
+  return out;
+}
+
 /* ---- riserva minima (se manca sia cache che rete) ------------------------ */
 const SAMPLE = {
   source:"sample",
@@ -219,7 +246,7 @@ function Shell({ data }) {
 }
 
 /* ---------------------------- planner ------------------------------------- */
-function emptyLoadout() { return { weapon: "w0", pieces: { head:"", chest:"", arms:"", waist:"", legs:"" }, charm: "c0", decos: {} }; }
+function emptyLoadout() { return { weapon: "w0", pieces: { head:"", chest:"", arms:"", waist:"", legs:"" }, charm: "c0", decos: {}, wmods: {}, cskills: [] }; }
 
 function Planner({ data, tab, setTab }) {
   const [lo, setLo] = useState(emptyLoadout);
@@ -242,8 +269,22 @@ function Planner({ data, tab, setTab }) {
   const result = useMemo(() => compute(lo, { pieceById, decoById, charmById, weaponById, skills: data.skills, bonuses: data.bonuses }), [lo, data, pieceById, decoById, charmById, weaponById]);
 
   const setPiece = (slot, id) => setLo(l => { const decos = {}; Object.keys(l.decos).forEach(k => { if (!k.startsWith(slot + "#")) decos[k] = l.decos[k]; }); return { ...l, pieces: { ...l.pieces, [slot]: id }, decos }; });
-  const setWeapon = (id) => setLo(l => { const decos = {}; Object.keys(l.decos).forEach(k => { if (!k.startsWith("weapon#")) decos[k] = l.decos[k]; }); return { ...l, weapon: id, decos }; });
+  const setWeapon = (id) => setLo(l => { const decos = {}; Object.keys(l.decos).forEach(k => { if (!k.startsWith("weapon#")) decos[k] = l.decos[k]; }); return { ...l, weapon: id, decos, wmods: {} }; });
+  const setCharm = (id) => setLo(l => ({ ...l, charm: id, cskills: [] }));
   const setDeco = (key, id) => setLo(l => ({ ...l, decos: { ...l.decos, [key]: id } }));
+  const setWmod = (patch) => setLo(l => ({ ...l, wmods: { ...(l.wmods || {}), ...patch } }));
+  const setCSkills = (arr) => setLo(l => ({ ...l, cskills: arr }));
+  const setWSlots = (arr) => setLo(l => {
+    const base = weaponById[l.weapon];
+    const slots = (arr && arr.length) ? arr : undefined;
+    const effLen = slots ? slots.length : (base ? base.slots.length : 0);
+    const decos = {};
+    Object.keys(l.decos).forEach(k => {
+      if (!k.startsWith("weapon#")) { decos[k] = l.decos[k]; return; }
+      if (Number(k.split("#")[1]) < effLen) decos[k] = l.decos[k];
+    });
+    return { ...l, decos, wmods: { ...(l.wmods || {}), slots } };
+  });
   const reset = () => setLo(emptyLoadout());
 
   const save = () => {
@@ -252,19 +293,20 @@ function Planner({ data, tab, setTab }) {
       weapon: w && w.id !== "w0" ? w.name : null, def: result.def, res: result.res,
       atk: result.atk, aff: result.aff,
       grade: result.score.grade, overall: result.score.overall, offense: result.score.offense, survival: result.score.survival, efr: result.score.efr,
-      lo: { weapon: lo.weapon, pieces: { ...lo.pieces }, charm: lo.charm, decos: { ...lo.decos } },
+      lo: { weapon: lo.weapon, pieces: { ...lo.pieces }, charm: lo.charm, decos: { ...lo.decos }, wmods: { ...(lo.wmods || {}) }, cskills: [...(lo.cskills || [])] },
       skills: result.skills.map(s => ({ name: s.name, level: s.level, cat: s.cat })),
       bonuses: result.activeBonuses.map(b => `${b.name} (${b.have} pz)`) }]);
     setName("");
   };
   const del = (id) => persist(builds.filter(b => b.id !== id));
-  const load = (b) => { if (b.lo) { setLo({ weapon: b.lo.weapon || "w0", pieces: { ...emptyLoadout().pieces, ...b.lo.pieces }, charm: b.lo.charm || "c0", decos: { ...b.lo.decos } }); setName(b.name); } };
+  const load = (b) => { if (b.lo) { setLo({ weapon: b.lo.weapon || "w0", pieces: { ...emptyLoadout().pieces, ...b.lo.pieces }, charm: b.lo.charm || "c0", decos: { ...b.lo.decos }, wmods: b.lo.wmods ? { ...b.lo.wmods } : {}, cskills: b.lo.cskills ? [...b.lo.cskills] : [] }); setName(b.name); } };
 
   if (tab === "compare") return <Compare builds={builds} del={del} load={(b) => { load(b); setTab("build"); }} goBuild={() => setTab("build")} />;
 
   const weapon = weaponById[lo.weapon];
+  const weaponEff = effectiveWeapon(weapon, lo.wmods);
   const slotSources = [];
-  if (weapon && weapon.slots.length) slotSources.push({ owner:"weapon", label:"Arma", slots:weapon.slots, kind:"weapon" });
+  if (weaponEff && weaponEff.slots.length) slotSources.push({ owner:"weapon", label:"Arma", slots:weaponEff.slots, kind:"weapon" });
   for (const s of SLOTS) { const p = pieceById[lo.pieces[s]]; if (p) slotSources.push({ owner:s, label:SLOT_LABEL[s], slots:p.slots, kind:"armor" }); }
 
   return (
@@ -276,7 +318,11 @@ function Planner({ data, tab, setTab }) {
           <div className="mh-slotcard-h"><span className="mh-slot-icon">⚔</span><span className="mh-slot-label">Arma</span>
             {weapon && weapon.id !== "w0" && <span className="mh-rank">{WKINDS[weapon.kind] || weapon.kind}</span>}</div>
           <WeaponPicker weapons={data.weapons} value={lo.weapon} onChange={setWeapon} data={data} />
-          {weapon && weapon.id !== "w0" && <WeaponInfo w={weapon} data={data} />}
+          {weapon && weapon.id !== "w0" && <WeaponInfo w={weaponEff} data={data} />}
+          {weapon && weapon.id !== "w0" && (
+            <WeaponMods data={data} weapon={weapon} wmods={lo.wmods || {}}
+              onPatch={setWmod} onSlots={setWSlots} onSkills={arr => setWmod({ skills: arr })} />
+          )}
         </div>
 
         {SLOTS.map(slot => {
@@ -293,7 +339,13 @@ function Planner({ data, tab, setTab }) {
 
         <div className="mh-slotcard">
           <div className="mh-slotcard-h"><span className="mh-slot-icon">✦</span><span className="mh-slot-label">Charm</span></div>
-          <CharmPicker charms={data.charms} value={lo.charm} onChange={id => setLo(l => ({ ...l, charm: id }))} data={data} />
+          <CharmPicker charms={data.charms} value={lo.charm} onChange={setCharm} data={data} />
+          {lo.charm && lo.charm !== "c0" && (
+            <div className="mh-manual-wrap">
+              <div className="mh-manual-h">Abilità manuali</div>
+              <ManualSkills data={data} entries={lo.cskills || []} onChange={setCSkills} />
+            </div>
+          )}
         </div>
 
         <div className="mh-eyebrow" style={{ marginTop: 20 }}>Gioielli</div>
@@ -424,8 +476,10 @@ function compute(lo, ctx) {
     p.bonuses.forEach(bid => { bonusCount[bid] = (bonusCount[bid] || 0) + 1; });
   }
   const w = weaponById[lo.weapon];
-  if (w) w.skills.forEach(([sid, l]) => add(sid, l));
+  const wEff = effectiveWeapon(w, lo.wmods);
+  if (wEff) wEff.skills.forEach(([sid, l]) => add(sid, l));
   const ch = charmById[lo.charm]; if (ch) ch.skills.forEach(([sid, l]) => add(sid, l));
+  (lo.cskills || []).forEach(([sid, l]) => add(sid, l));
   Object.values(lo.decos).forEach(id => { const d = decoById[id]; if (d) d.skills.forEach(([sid, l]) => add(sid, l)); });
 
   const activeBonuses = [];
@@ -442,9 +496,9 @@ function compute(lo, ctx) {
   }).sort((a, b) => a.cat === b.cat ? b.level - a.level : ord(a.cat) - ord(b.cat));
 
   const slmap = {}; skillList.forEach(s => { slmap[s.id] = s.level; });
-  const score = scoreBuild(slmap, w, def, res, activeBonuses);
+  const score = scoreBuild(slmap, wEff, def, res, activeBonuses);
 
-  return { def, res, skills: skillList, activeBonuses, score, atk: w ? w.raw : 0, aff: w ? w.aff : 0, el: w ? w.el : null, st: w ? w.st : null };
+  return { def, res, skills: skillList, activeBonuses, score, atk: wEff ? wEff.raw : 0, aff: wEff ? wEff.aff : 0, el: wEff ? wEff.el : null, st: wEff ? wEff.st : null };
 }
 const ord = (c) => ({ off:0, util:1, def:2 }[c] ?? 3);
 const rankLabel = (r) => r === "low" ? "LR" : r === "high" ? "HR" : r === "master" ? "MR" : (r || "").toUpperCase();
@@ -720,8 +774,93 @@ function WeaponInfo({ w, data }) {
       <span className="mh-tag mh-tag-def">Att {w.raw}</span>
       <span className="mh-tag mh-tag-def">Aff {w.aff}%</span>
       {w.el && <span className="mh-tag">{w.el[0]} {w.el[1]}</span>}
-      {w.skills.map(([sid, l]) => <span className="mh-tag" key={sid}>{data.skills[sid]?.name || sid} <b>{l}</b></span>)}
+      {w.st && <span className="mh-tag">{w.st[0]} {w.st[1]}</span>}
+      {w.skills.map(([sid, l], i) => <span className="mh-tag" key={"sk" + i}>{data.skills[sid]?.name || sid} <b>{l}</b></span>)}
       {w.slots.map((s, i) => <span className="mh-tag mh-tag-slot" key={"s" + i}>[{s}]</span>)}
+    </div>
+  );
+}
+
+/* Editor abilità manuali: aggiunge coppie [abilità, livello] a un elenco.
+   Usato per i charm con abilità casuali e per le abilità delle armi Artian. */
+function ManualSkills({ data, entries, onChange }) {
+  const [open, setOpen] = useState(false); const [q, setQ] = useState(""); const ref = useRef(null);
+  useEffect(() => { const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
+  const all = useMemo(() => Object.entries(data.skills).map(([id, s]) => ({ id, name: s.name, max: s.max })).sort((a, b) => a.name.localeCompare(b.name)), [data]);
+  const has = new Set(entries.map(e => String(e[0]))); const ql = q.toLowerCase();
+  const filtered = all.filter(s => !has.has(String(s.id)) && (!ql || s.name.toLowerCase().includes(ql)));
+  const addSkill = (s) => { onChange([...entries, [isNaN(Number(s.id)) ? s.id : Number(s.id), 1]]); setQ(""); setOpen(false); };
+  const setLvl = (idx, lvl) => { const max = data.skills[entries[idx][0]]?.max || 99; const v = Math.max(1, Math.min(max, lvl)); onChange(entries.map((e, i) => i === idx ? [e[0], v] : e)); };
+  const remove = (idx) => onChange(entries.filter((_, i) => i !== idx));
+  return (
+    <div className="mh-manual">
+      {entries.length > 0 && (
+        <div className="mh-manual-list">
+          {entries.map((e, idx) => { const m = data.skills[e[0]] || { name: e[0], max: 1 };
+            return (
+              <div className="mh-manual-row" key={idx}>
+                <span className="mh-manual-name">{m.name}</span>
+                <span className="mh-stepper">
+                  <button onClick={() => setLvl(idx, e[1] - 1)} disabled={e[1] <= 1}>−</button>
+                  <b>{e[1]}</b><i>/{m.max}</i>
+                  <button onClick={() => setLvl(idx, e[1] + 1)} disabled={e[1] >= m.max}>+</button>
+                </span>
+                <button className="mh-manual-x" onClick={() => remove(idx)}>×</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div className="mh-picker" ref={ref}>
+        <button className="mh-manual-add" onClick={() => setOpen(o => !o)}>＋ Aggiungi abilità</button>
+        {open && (
+          <div className="mh-pickpop">
+            <input autoFocus className="mh-input mh-picksearch" placeholder="Cerca abilità…" value={q} onChange={e => setQ(e.target.value)} />
+            <div className="mh-picklist">
+              {filtered.slice(0, 200).map(s => (
+                <button key={s.id} className="mh-pickitem" onClick={() => addSkill(s)}>
+                  <span className="mh-pickname">{s.name} <em>max {s.max}</em></span></button>
+              ))}
+              {filtered.length === 0 && <div className="mh-empty" style={{ padding: "8px 10px" }}>Nessun risultato.</div>}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* Modifica manuale dei valori "rollati" di un'arma Artian: attacco, affinità,
+   elemento/stato, slot e abilità. Gli override vivono in lo.wmods. */
+function WeaponMods({ data, weapon, wmods, onPatch, onSlots, onSkills }) {
+  const [open, setOpen] = useState(false);
+  const m = wmods || {};
+  const baseType = weapon.el ? codeFromLabel(weapon.el[0]) : weapon.st ? codeFromLabel(weapon.st[0]) : "none";
+  const curType = m.dmgType !== undefined ? m.dmgType : baseType;
+  const curVal = m.dmgVal !== undefined ? m.dmgVal : (weapon.el ? weapon.el[1] : weapon.st ? weapon.st[1] : 0);
+  const slotsStr = (m.slots != null ? m.slots : weapon.slots || []).join(",");
+  const numOr = (v) => v === "" ? undefined : Number(v);
+  return (
+    <div className="mh-artian">
+      <button className="mh-artian-toggle" onClick={() => setOpen(o => !o)}>{open ? "▾" : "▸"} Valori manuali / Artian</button>
+      {open && (
+        <div className="mh-artian-body">
+          <div className="mh-artian-grid">
+            <label>Attacco<input type="number" value={m.raw ?? weapon.raw} onChange={e => onPatch({ raw: numOr(e.target.value) })} /></label>
+            <label>Affinità %<input type="number" value={m.aff ?? weapon.aff} onChange={e => onPatch({ aff: numOr(e.target.value) })} /></label>
+            <label>Slot<input value={slotsStr} placeholder="es. 3,1,1" onChange={e => onSlots(parseSlots(e.target.value))} /></label>
+            <label>Elemento / Stato
+              <select value={curType} onChange={e => onPatch({ dmgType: e.target.value })}>
+                <option value="none">Nessuno</option>
+                {WDMG.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
+              </select>
+            </label>
+            <label>Valore<input type="number" value={curVal} disabled={curType === "none"} onChange={e => onPatch({ dmgVal: Number(e.target.value) || 0 })} /></label>
+          </div>
+          <div className="mh-manual-h">Abilità arma</div>
+          <ManualSkills data={data} entries={m.skills || []} onChange={onSkills} />
+        </div>
+      )}
     </div>
   );
 }
@@ -869,6 +1008,29 @@ const CSS = `
 .mh-lvl-n{flex:none;width:34px;font-family:'Rajdhani',sans-serif;font-weight:700;color:var(--gold-dim);}
 .mh-lvl.cur .mh-lvl-n{color:var(--gold);}
 .mh-lvl-d{flex:1;line-height:1.35;}
+/* --- input manuale (charm / Artian) --- */
+.mh-manual-wrap{margin-top:10px;border-top:1px solid var(--line);padding-top:9px;}
+.mh-manual-h{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold-dim);margin:0 0 7px;}
+.mh-manual-list{display:flex;flex-direction:column;gap:5px;margin-bottom:7px;}
+.mh-manual-row{display:flex;align-items:center;gap:8px;background:#0f0b07;border:1px solid var(--line);border-radius:7px;padding:4px 6px 4px 10px;}
+.mh-manual-name{flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.mh-stepper{display:flex;align-items:center;gap:5px;font-family:'Rajdhani',sans-serif;font-size:13px;color:var(--muted);}
+.mh-stepper b{color:var(--bone);font-weight:700;min-width:12px;text-align:center;} .mh-stepper i{font-style:normal;font-size:11px;}
+.mh-stepper button{width:22px;height:22px;line-height:1;background:#1a140d;border:1px solid var(--line);color:var(--gold);border-radius:5px;cursor:pointer;font-size:15px;font-weight:700;padding:0;}
+.mh-stepper button:hover:not(:disabled){border-color:var(--gold-dim);} .mh-stepper button:disabled{opacity:.35;cursor:default;}
+.mh-manual-x{background:transparent;border:none;color:var(--muted);cursor:pointer;font-size:17px;line-height:1;padding:0 3px;} .mh-manual-x:hover{color:var(--ember);}
+.mh-manual-add{width:100%;background:#0f0b07;border:1px dashed var(--gold-dim);color:var(--gold);border-radius:7px;padding:7px;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;}
+.mh-manual-add:hover{background:#1a140d;border-style:solid;}
+.mh-artian{margin-top:9px;border-top:1px solid var(--line);padding-top:8px;}
+.mh-artian-toggle{width:100%;text-align:left;background:transparent;border:none;color:var(--gold-dim);font-family:'Rajdhani',sans-serif;font-weight:700;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;cursor:pointer;padding:2px 0;}
+.mh-artian-toggle:hover{color:var(--gold);}
+.mh-artian-body{margin-top:9px;}
+.mh-artian-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:11px;}
+.mh-artian-grid label{display:flex;flex-direction:column;gap:3px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);}
+.mh-artian-grid label:nth-child(3){grid-column:1 / -1;}
+.mh-artian-grid input,.mh-artian-grid select{background:#0f0b07;border:1px solid var(--line);border-radius:6px;color:var(--bone);padding:7px 8px;font-size:13px;font-family:inherit;width:100%;appearance:none;}
+.mh-artian-grid input:focus,.mh-artian-grid select:focus{outline:2px solid var(--gold);border-color:var(--gold);}
+.mh-artian-grid input:disabled{opacity:.4;}
 `;
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
