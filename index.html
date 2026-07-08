@@ -11,13 +11,16 @@
     #diag .ok{color:#5fae7f;} #diag .bad{color:#d1603a;}
   </style>
   <!-- React + Babel da CDN (jsDelivr). onerror registra i fallimenti di caricamento. -->
-  <script>window.__cdn = { react:false, reactDom:false, babel:false, errors:[] };</script>
+  <script>window.__cdn = { react:false, reactDom:false, babel:false, supabase:false, errors:[] };</script>
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"
     onload="window.__cdn.react=true" onerror="window.__cdn.errors.push('react')"></script>
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"
     onload="window.__cdn.reactDom=true" onerror="window.__cdn.errors.push('react-dom')"></script>
   <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"
     onload="window.__cdn.babel=true" onerror="window.__cdn.errors.push('babel')"></script>
+  <!-- Supabase: sincronizzazione account (facoltativa). Assente nella versione Artifact. -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"
+    onload="window.__cdn.supabase=true" onerror="window.__cdn.errors.push('supabase')"></script>
 </head>
 <body>
   <div id="root"></div>
@@ -65,8 +68,18 @@ window.storage = window.storage || {
 };
 
 const API = "https://wilds.mhdb.io/it";
-const DB_KEY = "mhw_db_v3"; // v3: aggiunge le descrizioni per-livello delle abilità
+const DB_KEY = "mhw_db_v5"; // v5: aggiunge i materiali cumulativi dei charm al tracker risorse
 const BUILDS_KEY = "mhw_builds_v2";
+const MATS_KEY = "mhw_mats_owned_v1"; // inventario materiali posseduti (globale, per il tracker risorse)
+const SYNC_CFG_KEY = "mhw_sync_cfg_v1"; // (legacy) eventuale progetto Supabase personalizzato dall'utente
+
+// Progetto Supabase "ufficiale" dell'app: gli utenti si registrano qui, non
+// devono portare il proprio. La chiave publishable è pensata per il client;
+// i dati sono protetti dalla Row Level Security (ognuno vede solo i propri).
+const SUPABASE_APP = {
+  url: "https://zxdvwkvbatsscxoebwls.supabase.co",
+  key: "sb_publishable_hdF4ozuMDzJfTc22VasxTA_6W4kqxCL",
+};
 
 const ELEM = [["f","Fuoco","#d1603a"],["w","Acqua","#4a90c9"],["t","Tuono","#e0b83c"],["i","Ghiaccio","#6bb8c9"],["d","Drago","#9a6fc9"]];
 const SLOTS = ["head","chest","arms","waist","legs"];
@@ -130,6 +143,7 @@ const SAMPLE = {
 /* ---- trasformazione API -> formato interno ------------------------------- */
 function transform(skillsRaw, setsRaw, decosRaw, charmsRaw, weaponsRaw) {
   const skills = {}, bonuses = {};
+  const iconOf = (it) => ({ kind: it && it.icon ? it.icon.kind : "item", color: it && it.icon ? it.icon.color : null });
   const catOf = (k) => k === "offense" || k === "attack" || k === "affinity" || k === "element" || k === "ranged" || k === "handicraft" ? "off"
     : k === "defense" || k === "health" ? "def" : "util";
   for (const s of skillsRaw) {
@@ -147,6 +161,7 @@ function transform(skillsRaw, setsRaw, decosRaw, charmsRaw, weaponsRaw) {
   const pieces = [];
   for (const set of setsRaw || []) {
     for (const p of set.pieces || []) {
+      if (p.rank === "low") continue;                         // niente Low Rank: le build si fanno da High Rank
       const res = { f:0,w:0,t:0,i:0,d:0 };
       if (p.resistances) for (const [k,v] of Object.entries(p.resistances)) if (RESMAP[k]) res[RESMAP[k]] = v;
       const psk = [], pbn = [];
@@ -155,26 +170,66 @@ function transform(skillsRaw, setsRaw, decosRaw, charmsRaw, weaponsRaw) {
         if (ps.setPiecesRequired != null || ["group","set","series"].includes(ps.skill?.kind)) pbn.push(sid);
         else psk.push([sid, ps.level || 1]);
       }
+      const cr = p.crafting || {};
+      const mats = (cr.materials || []).map(m => ({ id: m.item?.id, name: m.item?.name, icon: iconOf(m.item), qty: m.quantity || 0 })).filter(x => x.id != null);
       pieces.push({ id: "p" + p.id, set: set.id, setName: set.name, slot: p.kind, rank: p.rank,
-        def: p.defense?.base ?? 0, res, slots: (p.slots || []).slice(), skills: psk, bonuses: pbn });
+        def: p.defense?.base ?? 0, res, slots: (p.slots || []).slice(), skills: psk, bonuses: pbn,
+        mats, zenny: cr.zennyCost || 0 });
     }
   }
   const decos = (decosRaw || []).map(d => ({ id: "d" + d.id, name: d.name, size: d.slot,
     kind: d.kind === "weapon" ? "weapon" : "armor",
     skills: (d.skills || []).map(s => [s.skill?.id, s.level || 1]).filter(x => x[0] != null) })).filter(d => d.skills.length);
-  const charms = [{ id: "c0", name: "— Nessun charm —", skills: [] }];
-  for (const c of charmsRaw || []) for (const r of c.ranks || [])
-    charms.push({ id: "c" + c.id + "_" + r.level, name: r.name, skills: (r.skills || []).map(s => [s.skill?.id, s.level || 1]).filter(x => x[0] != null) });
-  const weapons = [{ id: "w0", kind: "great-sword", name: "— Nessuna arma —", slots: [], skills: [], raw: 0, aff: 0, el: null, st: null }];
+  const charms = [{ id: "c0", name: "— Nessun charm —", skills: [], mats: [], zenny: 0 }];
+  for (const c of charmsRaw || []) {
+    const ranks = (c.ranks || []).slice().sort((a, b) => (a.level || 0) - (b.level || 0));
+    const acc = {}; let zenny = 0;                            // costo cumulativo: rango L include i ranghi 1..L
+    for (const r of ranks) {
+      const cr = r.crafting || {};
+      for (const m of cr.materials || []) {
+        const it = m.item; if (!it || it.id == null) continue;
+        if (!acc[it.id]) acc[it.id] = { id: it.id, name: it.name, icon: iconOf(it), qty: 0 };
+        acc[it.id].qty += m.quantity || 0;
+      }
+      zenny += cr.zennyCost || 0;
+      charms.push({ id: "c" + c.id + "_" + r.level, name: r.name,
+        skills: (r.skills || []).map(s => [s.skill?.id, s.level || 1]).filter(x => x[0] != null),
+        mats: Object.values(acc).map(x => ({ ...x })), zenny });
+    }
+  }
+  // indice per risalire l'albero di potenziamento (serve anche per armi Low Rank non elencate)
+  const wRawById = {};
+  for (const w of weaponsRaw || []) if (w && w.id != null) wRawById[w.id] = w;
+  // materiali totali per forgiare l'arma da zero: radice (craftingMaterials) + tutti i potenziamenti (upgradeMaterials)
+  function weaponTreeMaterials(w) {
+    const acc = {}; let zenny = 0; let cur = w; let guard = 0;
+    while (cur && guard++ < 60) {
+      const c = cur.crafting || {};
+      const root = c.previous == null;
+      const list = root ? (c.craftingMaterials || []) : (c.upgradeMaterials || []);
+      zenny += root ? (c.craftingZennyCost || 0) : (c.upgradeZennyCost || 0);
+      for (const m of list) {
+        const it = m.item; if (!it || it.id == null) continue;
+        if (!acc[it.id]) acc[it.id] = { id: it.id, name: it.name, icon: iconOf(it), qty: 0 };
+        acc[it.id].qty += m.quantity || 0;
+      }
+      cur = (c.previous && c.previous.id != null) ? wRawById[c.previous.id] : null;
+    }
+    return { mats: Object.values(acc), zenny };
+  }
+  const weapons = [{ id: "w0", kind: "great-sword", name: "— Nessuna arma —", slots: [], skills: [], raw: 0, aff: 0, el: null, st: null, rarity: 0, mats: [], zenny: 0 }];
   for (const w of weaponsRaw || []) {
+    if ((w.rarity || 0) < 5) continue;                        // solo High Rank (rarità 5-8)
     let el = null, st = null;
     for (const sp of w.specials || []) {
       if (sp.kind === "element" && sp.element) el = [sp.element, sp.damage?.display ?? sp.damage?.raw ?? 0];
       else if (sp.kind === "status" && sp.status) st = [sp.status, sp.damage?.display ?? sp.damage?.raw ?? 0];
     }
+    const tree = weaponTreeMaterials(w);
     weapons.push({ id: "w" + w.kind + "_" + w.id, kind: w.kind, name: w.name, slots: (w.slots || []).slice(),
       skills: (w.skills || []).map(s => [s.skill?.id, s.level || 1]).filter(x => x[0] != null),
-      raw: w.damage?.raw ?? 0, aff: w.affinity ?? 0, el, st });
+      raw: w.damage?.raw ?? 0, aff: w.affinity ?? 0, el, st, rarity: w.rarity || 0,
+      mats: tree.mats, zenny: tree.zenny });
   }
   return { source: "live", skills, bonuses, pieces, decos, charms, weapons };
 }
@@ -210,8 +265,46 @@ function App() {
     return () => { alive = false; };
   }, []);
 
+  const sync = useSupabaseSync();
   if (!data) return <Loading status={status} />;
-  return <Shell data={data} />;
+  return <Shell data={data} sync={sync} />;
+}
+
+/* ===================== sincronizzazione cloud (Supabase) =====================
+   Local-first: l'app funziona identica senza login. Con un progetto Supabase
+   configurato e l'utente autenticato, build e inventario materiali vivono anche
+   nel cloud e si allineano tra i dispositivi. */
+function loadSyncCfg() {
+  try { const c = JSON.parse(localStorage.getItem(SYNC_CFG_KEY) || "null"); if (c && c.url && c.key) return c; } catch (e) {}
+  return SUPABASE_APP; // default: progetto ufficiale dell'app
+}
+
+/* unione delle build per id: a parità di id prevale la versione del cloud */
+function mergeBuilds(local, cloud) {
+  const map = new Map();
+  (local || []).forEach(b => { if (b && b.id) map.set(b.id, b); });
+  (cloud || []).forEach(b => { if (b && b.id) map.set(b.id, b); });
+  return [...map.values()];
+}
+
+function useSupabaseSync() {
+  const [cfg, setCfg] = useState(loadSyncCfg);
+  const [client, setClient] = useState(null);
+  const [user, setUser] = useState(null);
+  const [msg, setMsg] = useState("");
+  useEffect(() => {
+    if (!cfg || !cfg.url || !cfg.key) { setClient(null); setUser(null); return; }
+    if (!window.supabase || !window.supabase.createClient) { setMsg("La sincronizzazione richiede la versione dell'app ospitata online (qui la libreria non è disponibile)."); return; }
+    let c;
+    try { c = window.supabase.createClient(cfg.url, cfg.key); } catch (e) { setMsg("Configurazione Supabase non valida."); return; }
+    setClient(c); setMsg("");
+    c.auth.getSession().then(({ data }) => setUser(data && data.session ? data.session.user : null)).catch(() => {});
+    const { data: sub } = c.auth.onAuthStateChange((_e, session) => setUser(session ? session.user : null));
+    return () => { try { sub.subscription.unsubscribe(); } catch (e) {} };
+  }, [cfg]);
+  const saveCfg = (url, key) => { const n = { url: (url || "").trim(), key: (key || "").trim() }; try { localStorage.setItem(SYNC_CFG_KEY, JSON.stringify(n)); } catch (e) {} setCfg(n); setMsg(""); };
+  const clearCfg = () => { try { localStorage.removeItem(SYNC_CFG_KEY); } catch (e) {} setCfg(null); setClient(null); setUser(null); setMsg(""); };
+  return { cfg, client, user, msg, setMsg, saveCfg, clearCfg };
 }
 
 function Loading({ status }) {
@@ -223,7 +316,7 @@ function Loading({ status }) {
   );
 }
 
-function Shell({ data }) {
+function Shell({ data, sync }) {
   const [tab, setTab] = useState("build");
   const srcLabel = data.source === "cache" ? `${data.pieces.length} pezzi · ${data.weapons.length - 1} armi · offline`
     : data.source === "live" ? `${data.pieces.length} pezzi · ${data.weapons.length - 1} armi · live`
@@ -234,13 +327,119 @@ function Shell({ data }) {
         <div className="mh-crest">◆</div>
         <div className="mh-titlewrap"><h1>Pianificatore Build</h1><p className="mh-sub">Monster Hunter Wilds</p></div>
         <span className={"mh-badge " + (data.source === "sample" ? "offline" : "live")}>{srcLabel}</span>
+        <AccountBar sync={sync} />
       </header>
       <nav className="mh-tabs">
         <button className={tab === "build" ? "on" : ""} onClick={() => setTab("build")}>Costruttore</button>
+        <button className={tab === "resources" ? "on" : ""} onClick={() => setTab("resources")}>Risorse</button>
         <button className={tab === "compare" ? "on" : ""} onClick={() => setTab("compare")}>Confronto</button>
       </nav>
-      <Planner data={data} tab={tab} setTab={setTab} />
+      <Planner data={data} tab={tab} setTab={setTab} sync={sync} />
       {data.source === "sample" && <p className="mh-footer">Non è stato possibile scaricare il database né trovarne una copia locale. Stai usando un piccolo campione. Riapri l'app dove la rete è consentita per scaricare (una volta sola) l'intero database.</p>}
+    </div>
+  );
+}
+
+/* barra account nell'header + pannello di login/configurazione */
+function AccountBar({ sync }) {
+  const [open, setOpen] = useState(false);
+  // senza la libreria Supabase (es. versione Artifact) la sync non è possibile: niente barra account
+  if (!(typeof window !== "undefined" && window.supabase)) return null;
+  const email = sync && sync.user ? (sync.user.email || "") : "";
+  const short = email ? (email.length > 20 ? email.slice(0, 18) + "…" : email) : "";
+  return (
+    <>
+      <button className={"mh-acct" + (sync && sync.user ? " on" : "")} onClick={() => setOpen(true)}
+        title="Sincronizzazione account">
+        <span className="mh-acct-dot" />{sync && sync.user ? short : "Accedi"}
+      </button>
+      {open && <AccountPanel sync={sync} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+function AccountPanel({ sync, onClose }) {
+  const needCfg = !sync.cfg || !sync.cfg.url || !sync.cfg.key;
+  const [mode, setMode] = useState(needCfg ? "cfg" : "login"); // cfg | login | signup
+  const [url, setUrl] = useState(sync.cfg ? sync.cfg.url : "");
+  const [key, setKey] = useState(sync.cfg ? sync.cfg.key : "");
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [ok, setOk] = useState("");
+
+  const saveCfg = () => {
+    if (!url.trim() || !key.trim()) { setErr("Inserisci URL del progetto e chiave anon."); return; }
+    sync.saveCfg(url, key); setErr(""); setOk(""); setMode("login");
+  };
+  const auth = async () => {
+    if (!sync.client) { setErr(sync.msg || "Configura prima il progetto Supabase."); return; }
+    if (!email.trim() || !pw) { setErr("Email e password richieste."); return; }
+    setBusy(true); setErr(""); setOk("");
+    try {
+      const res = mode === "signup"
+        ? await sync.client.auth.signUp({ email: email.trim(), password: pw })
+        : await sync.client.auth.signInWithPassword({ email: email.trim(), password: pw });
+      if (res.error) throw res.error;
+      if (mode === "signup" && !(res.data && res.data.session)) {
+        setOk("Registrato. Conferma l'email (se richiesto), poi accedi."); setMode("login");
+      } else { onClose(); }
+    } catch (e) { setErr(e.message || "Errore di autenticazione."); }
+    setBusy(false);
+  };
+  const signOut = async () => { try { await sync.client.auth.signOut(); } catch (e) {} onClose(); };
+  const google = () => {
+    if (!sync.client) { setErr(sync.msg || "Servizio non disponibile."); return; }
+    // dopo Google torniamo alla stessa pagina (senza frammento #...)
+    sync.client.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.href.split("#")[0] } });
+  };
+
+  return (
+    <div className="mh-modal" onMouseDown={onClose}>
+      <div className="mh-modal-card" onMouseDown={e => e.stopPropagation()}>
+        <div className="mh-modal-h"><span>Sincronizzazione account</span><button className="mh-modal-x" onClick={onClose}>×</button></div>
+
+        {sync.user ? (
+          <div className="mh-acctbody">
+            <p className="mh-acct-status"><span className="mh-acct-dot on" /> Connesso come <b>{sync.user.email}</b></p>
+            <p className="mh-acct-note">Le tue build e l'inventario materiali si sincronizzano automaticamente su questo progetto. Apri l'app su un altro dispositivo, configura lo stesso progetto e accedi con questo account per ritrovare tutto.</p>
+            <div className="mh-acct-row">
+              <button className="mh-btn" onClick={signOut}>Esci</button>
+            </div>
+          </div>
+        ) : mode === "cfg" ? (
+          <div className="mh-acctbody">
+            <p className="mh-acct-note">Incolla i dati del <b>tuo</b> progetto Supabase (li trovi in <i>Project Settings → API</i>). Restano salvati solo su questo dispositivo.</p>
+            <label className="mh-fld"><span>URL del progetto</span>
+              <input className="mh-input" placeholder="https://xxxx.supabase.co" value={url} onChange={e => setUrl(e.target.value)} /></label>
+            <label className="mh-fld"><span>Chiave anon (public)</span>
+              <input className="mh-input" placeholder="eyJhbGciOi…" value={key} onChange={e => setKey(e.target.value)} /></label>
+            {err && <p className="mh-acct-err">{err}</p>}
+            <div className="mh-acct-row"><button className="mh-btn" onClick={saveCfg}>Salva configurazione</button></div>
+          </div>
+        ) : (
+          <div className="mh-acctbody">
+            <button className="mh-gbtn" onClick={google}><span className="mh-gicon">G</span> Continua con Google</button>
+            <div className="mh-or"><span>oppure con email</span></div>
+            <div className="mh-acct-tabs">
+              <button className={mode === "login" ? "on" : ""} onClick={() => { setMode("login"); setErr(""); }}>Accedi</button>
+              <button className={mode === "signup" ? "on" : ""} onClick={() => { setMode("signup"); setErr(""); }}>Registrati</button>
+            </div>
+            <label className="mh-fld"><span>Email</span>
+              <input className="mh-input" type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} /></label>
+            <label className="mh-fld"><span>Password</span>
+              <input className="mh-input" type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} value={pw} onChange={e => setPw(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") auth(); }} /></label>
+            {err && <p className="mh-acct-err">{err}</p>}
+            {ok && <p className="mh-acct-ok">{ok}</p>}
+            {sync.msg && <p className="mh-acct-err">{sync.msg}</p>}
+            <div className="mh-acct-row">
+              <button className="mh-btn" onClick={auth} disabled={busy}>{busy ? "…" : mode === "signup" ? "Crea account" : "Accedi"}</button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -248,13 +447,55 @@ function Shell({ data }) {
 /* ---------------------------- planner ------------------------------------- */
 function emptyLoadout() { return { weapon: "w0", pieces: { head:"", chest:"", arms:"", waist:"", legs:"" }, charm: "c0", decos: {}, wmods: {}, cskills: [] }; }
 
-function Planner({ data, tab, setTab }) {
+function Planner({ data, tab, setTab, sync }) {
   const [lo, setLo] = useState(emptyLoadout);
   const [builds, setBuilds] = useState([]);
   const [name, setName] = useState("");
+  const [owned, setOwned] = useState({});
+  const [syncMsg, setSyncMsg] = useState("");
+  const syncReady = useRef(false);
+  const pushT = useRef(null);
+  const uid = sync && sync.user ? sync.user.id : null;
 
   useEffect(() => { (async () => { try { const r = await window.storage.get(BUILDS_KEY); if (r && r.value) setBuilds(JSON.parse(r.value)); } catch (e) {} })(); }, []);
+  useEffect(() => { (async () => { try { const r = await window.storage.get(MATS_KEY); if (r && r.value) setOwned(JSON.parse(r.value)); } catch (e) {} })(); }, []);
   const persist = async (next) => { setBuilds(next); try { await window.storage.set(BUILDS_KEY, JSON.stringify(next)); } catch (e) {} };
+  const persistOwned = async (next) => { setOwned(next); try { await window.storage.set(MATS_KEY, JSON.stringify(next)); } catch (e) {} };
+
+  // al login: scarico dal cloud, unisco al locale (nessuna perdita) e riallineo entrambi
+  useEffect(() => {
+    let alive = true;
+    if (!sync || !sync.client || !uid) { syncReady.current = false; return; }
+    syncReady.current = false;
+    (async () => {
+      setSyncMsg("Sincronizzo…");
+      try {
+        const { data: row, error } = await sync.client.from("user_data").select("builds,owned").eq("user_id", uid).maybeSingle();
+        if (!alive) return;
+        if (error) throw error;
+        const mb = mergeBuilds(builds, (row && row.builds) || []);
+        const mo = { ...(owned || {}), ...((row && row.owned) || {}) };
+        setBuilds(mb); try { await window.storage.set(BUILDS_KEY, JSON.stringify(mb)); } catch (e) {}
+        setOwned(mo); try { await window.storage.set(MATS_KEY, JSON.stringify(mo)); } catch (e) {}
+        syncReady.current = true;
+        const up = await sync.client.from("user_data").upsert({ user_id: uid, builds: mb, owned: mo, updated_at: new Date().toISOString() });
+        if (alive) setSyncMsg(up.error ? "Errore sync" : "Sincronizzato ✓");
+      } catch (e) { if (alive) setSyncMsg("Errore sync: " + (e.message || "")); }
+    })();
+    return () => { alive = false; };
+  }, [uid]);
+
+  // ad ogni modifica (una volta pronto): invio al cloud, con debounce
+  useEffect(() => {
+    if (!sync || !sync.client || !uid || !syncReady.current) return;
+    clearTimeout(pushT.current);
+    setSyncMsg("Salvo…");
+    pushT.current = setTimeout(() => {
+      sync.client.from("user_data").upsert({ user_id: uid, builds, owned, updated_at: new Date().toISOString() })
+        .then(({ error }) => setSyncMsg(error ? "Errore sync" : "Sincronizzato ✓")).catch(() => setSyncMsg("Errore sync"));
+    }, 1200);
+    return () => clearTimeout(pushT.current);
+  }, [builds, owned]);
 
   const pieceById = useMemo(() => Object.fromEntries(data.pieces.map(p => [p.id, p])), [data]);
   const decoById  = useMemo(() => Object.fromEntries(data.decos.map(d => [d.id, d])), [data]);
@@ -267,6 +508,7 @@ function Planner({ data, tab, setTab }) {
   }, [data]);
 
   const result = useMemo(() => compute(lo, { pieceById, decoById, charmById, weaponById, skills: data.skills, bonuses: data.bonuses }), [lo, data, pieceById, decoById, charmById, weaponById]);
+  const materials = useMemo(() => aggregateMaterials(lo, { pieceById, weaponById, charmById }), [lo, pieceById, weaponById, charmById]);
 
   const setPiece = (slot, id) => setLo(l => { const decos = {}; Object.keys(l.decos).forEach(k => { if (!k.startsWith(slot + "#")) decos[k] = l.decos[k]; }); return { ...l, pieces: { ...l.pieces, [slot]: id }, decos }; });
   const setWeapon = (id) => setLo(l => { const decos = {}; Object.keys(l.decos).forEach(k => { if (!k.startsWith("weapon#")) decos[k] = l.decos[k]; }); return { ...l, weapon: id, decos, wmods: {} }; });
@@ -292,7 +534,7 @@ function Planner({ data, tab, setTab }) {
     persist([...builds, { id: "b" + Date.now(), name: name.trim() || `Build ${builds.length + 1}`,
       weapon: w && w.id !== "w0" ? w.name : null, def: result.def, res: result.res,
       atk: result.atk, aff: result.aff,
-      grade: result.score.grade, overall: result.score.overall, offense: result.score.offense, survival: result.score.survival, efr: result.score.efr,
+      grade: result.score.grade, overall: result.score.overall, offense: result.score.offense, survival: result.score.survival, qol: result.score.qol, efr: result.score.efr,
       lo: { weapon: lo.weapon, pieces: { ...lo.pieces }, charm: lo.charm, decos: { ...lo.decos }, wmods: { ...(lo.wmods || {}) }, cskills: [...(lo.cskills || [])] },
       skills: result.skills.map(s => ({ name: s.name, level: s.level, cat: s.cat })),
       bonuses: result.activeBonuses.map(b => `${b.name} (${b.have} pz)`) }]);
@@ -302,6 +544,7 @@ function Planner({ data, tab, setTab }) {
   const load = (b) => { if (b.lo) { setLo({ weapon: b.lo.weapon || "w0", pieces: { ...emptyLoadout().pieces, ...b.lo.pieces }, charm: b.lo.charm || "c0", decos: { ...b.lo.decos }, wmods: b.lo.wmods ? { ...b.lo.wmods } : {}, cskills: b.lo.cskills ? [...b.lo.cskills] : [] }); setName(b.name); } };
 
   if (tab === "compare") return <Compare builds={builds} del={del} load={(b) => { load(b); setTab("build"); }} goBuild={() => setTab("build")} />;
+  if (tab === "resources") return <Resources materials={materials} owned={owned} setOwned={persistOwned} goBuild={() => setTab("build")} />;
 
   const weapon = weaponById[lo.weapon];
   const weaponEff = effectiveWeapon(weapon, lo.wmods);
@@ -373,6 +616,7 @@ function Planner({ data, tab, setTab }) {
           <input className="mh-input" placeholder="Nome build…" value={name} onChange={e => setName(e.target.value)} />
           <button className="mh-btn" onClick={save}>Salva</button>
         </div>
+        {sync && sync.user && syncMsg && <p className="mh-syncmsg">{syncMsg}</p>}
         {builds.length > 0 && (
           <div className="mh-saved">
             {builds.map(b => (
@@ -405,63 +649,80 @@ const META = {
   sustain:{ 119:1, 124:1, 126:1, 117:1, 163:1 },                                     // artigianato/affilatura
   WEX:57, AGI:144, MM:99, RES:123, CB:22, DIVINE:122, REC_UP:31, REC_SPD:30,
 };
-function scoreBuild(sl, w, def, res, bonuses) {
+const clamp01 = (x) => x < 0 ? 0 : x > 1 ? 1 : x;
+function scoreBuild(sl, w, def, res, bonuses, skillList) {
   const lv = id => sl[id] || 0;
   const at = (tab, id) => (tab[id] && lv(id)) ? (tab[id][lv(id) - 1] || 0) : 0;
   const hasWeapon = w && w.id !== "w0";
 
+  // ---- danno effettivo (EFR): base della valutazione offensiva ----
   let flat = 0, pct = 0, affSkills = 0;
   for (const id in META.flat) flat += at(META.flat, id);
   for (const id in META.pct) pct += at(META.pct, id);
   for (const id in META.aff) affSkills += at(META.aff, id);
   const affTotal = Math.max(-100, Math.min(100, (hasWeapon ? w.aff : 0) + affSkills));
-  const critPct = lv(META.CB) ? META.crit[META.CB][lv(META.CB) - 1] : 25; // critico base +25%
+  const critPct = lv(META.CB) ? META.crit[META.CB][lv(META.CB) - 1] : 25; // danno critico base +25%
   const rawTotal = ((hasWeapon ? w.raw : 0) + flat) * (1 + pct / 100);
   const critFactor = affTotal >= 0 ? 1 + (affTotal / 100) * (critPct / 100) : 1 + (affTotal / 100) * 0.25;
   const efr = hasWeapon ? Math.round(rawTotal * critFactor) : 0;
 
-  // --- Offesa (0-100) ---
+  // ---- OFFESA (0-100), ancorata all'EFR reale invece che a bonus euristici ----
+  // Intervallo realistico HR: EFR ~150 (arma nuda) → ~450 (build meta pienamente potenziata).
   let off = 0;
   if (hasWeapon) {
-    off += Math.max(0, Math.min(affTotal, 100)) / 100 * 35;   // rateo critico
-    off += Math.max(0, critPct - 25) / 15 * 20;               // danno critico
-    off += Math.min(flat, 40) / 40 * 15;                      // attacco piatto
-    off += lv(META.WEX) ? 10 : 0;                             // core meta
-    off += (lv(META.AGI) || lv(META.MM) || lv(META.RES)) ? 8 : 0;
-    let syn = 0; for (const id in META.elem) if (lv(id)) syn = 1; for (const id in META.status) if (lv(id)) syn = 1;
-    const elemActive = (w.el || w.st) ? 1 : 0;
-    off += elemActive ? (syn ? 7 : 3) : 0;                    // sinergia elem/stato
-    let sus = 0; for (const id in META.sustain) if (lv(id)) sus = 1;
-    off += sus ? 5 : 0;                                       // sostenibilità
+    off = clamp01((efr - 150) / (450 - 150)) * 82;            // nucleo: danno effettivo (0-82)
+    if (w.el || w.st) {                                       // elemento/stato: l'EFR non lo cattura
+      let syn = false;
+      for (const id in META.elem) if (lv(id)) syn = true;
+      for (const id in META.status) if (lv(id)) syn = true;
+      off += syn ? 10 : 4;
+    }
+    off += lv(META.WEX) ? 4 : 0;                              // completezza del nucleo critico
+    off += lv(META.CB) ? 4 : 0;
   }
   off = Math.round(Math.min(100, off));
 
-  // --- Sopravvivenza (0-100) ---
+  // ---- SOPRAVVIVENZA (0-100) ----
   const resSum = ["f", "w", "t", "i", "d"].reduce((a, k) => a + (res[k] > 0 ? res[k] : 0), 0);
   const divineMit = [0, 0.06, 0.12, 0.20][lv(META.DIVINE)] || 0;
   const gutsRe = /guts|tenac|sopravviv|colpo letale|eroic|salute/i;
   const guts = (bonuses || []).some(b => gutsRe.test(b.name || "") || gutsRe.test(b.desc || ""));
+  const healthRe = /salute|vitalit|health/i;
+  const healthLv = (skillList || []).filter(s => healthRe.test(s.name || "")).reduce((a, s) => a + s.level, 0);
   let surv = 0;
-  surv += Math.min(def, 600) / 600 * 45;
-  surv += divineMit * 100;
-  surv += Math.min(resSum, 60) / 60 * 15;
-  surv += Math.min(lv(META.REC_UP) + lv(META.REC_SPD), 6) / 6 * 8;
-  surv += guts ? 12 : 0;
+  surv += clamp01(def / 700) * 42;                            // difesa (HR endgame ~600-800)
+  surv += (divineMit / 0.20) * 18;                            // protezione divina piena = 18
+  surv += clamp01(resSum / 60) * 14;                          // resistenze elementali
+  surv += clamp01((lv(META.REC_UP) + lv(META.REC_SPD)) / 6) * 8;
+  surv += clamp01(healthLv / 3) * 6;                          // aumento salute
+  surv += guts ? 12 : 0;                                      // colpo letale / tenacia
   surv = Math.round(Math.min(100, surv));
 
-  const overall = Math.round(off * 0.65 + surv * 0.35);
-  const grade = overall >= 85 ? "S" : overall >= 70 ? "A" : overall >= 55 ? "B" : overall >= 40 ? "C" : "D";
+  // ---- QUALITÀ DI VITA (0-100): abilità di utilità (comfort, mobilità, sostentamento) ----
+  const utilLv = (skillList || []).filter(s => s.cat === "util").reduce((a, s) => a + Math.min(s.level, s.max), 0);
+  let susActive = 0; for (const id in META.sustain) if (lv(id)) susActive++;
+  let qol = clamp01(utilLv / 16) * 82 + clamp01(susActive / 2) * 18; // ~16 livelli utility + sostentamento affilatura
+  qol = Math.round(Math.min(100, qol));
+
+  // ---- voto complessivo e grado (soglie ricalibrate) ----
+  const overall = hasWeapon
+    ? Math.round(off * 0.58 + surv * 0.27 + qol * 0.15)
+    : Math.round(surv * 0.62 + qol * 0.38);                   // senza arma: solo difesa/comfort
+  const grade = overall >= 86 ? "S" : overall >= 72 ? "A" : overall >= 56 ? "B" : overall >= 40 ? "C" : "D";
 
   const notes = [];
-  if (!hasWeapon) notes.push("Nessuna arma: valutazione solo difensiva");
+  if (!hasWeapon) notes.push("Nessuna arma: valutazione solo difensiva/comfort");
   else {
-    if (affTotal >= 90 && lv(META.CB) >= 3) notes.push("Nucleo critico eccellente");
-    else if (affTotal < 100) notes.push(`Affinità ${affTotal > 0 ? "+" : ""}${affTotal}% (il meta punta al 100%)`);
+    if (efr >= 400) notes.push("Danno effettivo eccellente");
+    else if (efr < 260) notes.push(`EFR ${efr} basso per l'endgame`);
+    if (affTotal < 100 && affTotal >= 0) notes.push(`Affinità ${affTotal > 0 ? "+" : ""}${affTotal}% (il meta punta al 100%)`);
+    else if (affTotal < 0) notes.push(`Affinità negativa ${affTotal}%`);
     if (!lv(META.CB)) notes.push("Manca Bonus critico");
     if (!lv(META.WEX)) notes.push("Manca Punto debole");
   }
   if (surv < 30) notes.push("Sopravvivenza bassa");
-  return { overall, grade, offense: off, survival: surv, efr, affinity: affTotal, guts, notes };
+  if (qol < 20 && hasWeapon) notes.push("Poche abilità di comfort");
+  return { overall, grade, offense: off, survival: surv, qol, efr, affinity: affTotal, guts, notes };
 }
 
 /* ------------------------- calcolo aggregato ------------------------------ */
@@ -482,13 +743,21 @@ function compute(lo, ctx) {
   (lo.cskills || []).forEach(([sid, l]) => add(sid, l));
   Object.values(lo.decos).forEach(id => { const d = decoById[id]; if (d) d.skills.forEach(([sid, l]) => add(sid, l)); });
 
-  const activeBonuses = [];
+  const activeBonuses = []; const bonusList = [];
   for (const [bid, have] of Object.entries(bonusCount)) {
     const meta = bonuses[bid]; if (!meta) continue;
-    const reached = (meta.thresholds || []).filter(t => have >= t.pieces);
+    const ths = (meta.thresholds || []).map(t => ({ pieces: t.pieces, desc: t.desc, unlocked: have >= t.pieces }))
+      .sort((a, b) => a.pieces - b.pieces);
+    const reached = ths.filter(t => t.unlocked);
+    // per il punteggio/salvataggio: solo i bonus effettivamente attivi
     if (reached.length) { const top = reached[reached.length - 1]; activeBonuses.push({ id: bid, name: meta.name, kind: meta.kind, have, desc: top.desc, at: top.pieces }); }
+    // per la UI: ogni bonus presente (anche con 1 pezzo), con soglie sbloccate/bloccate
+    const nextTh = ths.find(t => !t.unlocked);
+    bonusList.push({ id: bid, name: meta.name, kind: meta.kind, have, thresholds: ths,
+      anyUnlocked: reached.length > 0, nextAt: nextTh ? nextTh.pieces : null });
   }
   activeBonuses.sort((a, b) => a.kind === b.kind ? 0 : a.kind === "group" ? -1 : 1);
+  bonusList.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "group" ? -1 : 1) || (b.anyUnlocked - a.anyUnlocked) || (b.have - a.have));
 
   const skillList = Object.entries(raw).map(([sid, r]) => {
     const m = skills[sid] || { name: sid, max: r, cat: "util", desc: "", levels: [] };
@@ -496,9 +765,9 @@ function compute(lo, ctx) {
   }).sort((a, b) => a.cat === b.cat ? b.level - a.level : ord(a.cat) - ord(b.cat));
 
   const slmap = {}; skillList.forEach(s => { slmap[s.id] = s.level; });
-  const score = scoreBuild(slmap, wEff, def, res, activeBonuses);
+  const score = scoreBuild(slmap, wEff, def, res, activeBonuses, skillList);
 
-  return { def, res, skills: skillList, activeBonuses, score, atk: wEff ? wEff.raw : 0, aff: wEff ? wEff.aff : 0, el: wEff ? wEff.el : null, st: wEff ? wEff.st : null };
+  return { def, res, skills: skillList, activeBonuses, bonusList, score, atk: wEff ? wEff.raw : 0, aff: wEff ? wEff.aff : 0, el: wEff ? wEff.el : null, st: wEff ? wEff.st : null };
 }
 const ord = (c) => ({ off:0, util:1, def:2 }[c] ?? 3);
 const rankLabel = (r) => r === "low" ? "LR" : r === "high" ? "HR" : r === "master" ? "MR" : (r || "").toUpperCase();
@@ -522,6 +791,7 @@ function ScorePanel({ score }) {
         <div className="mh-score-bars">
           <ScoreBar label="Offesa" v={score.offense} cls="off" />
           <ScoreBar label="Sopravv." v={score.survival} cls="surv" />
+          <ScoreBar label="Comfort" v={score.qol || 0} cls="qol" />
         </div>
         <div className="mh-score-meta">
           {score.efr > 0 && <span>EFR <b>{score.efr}</b></span>}
@@ -562,12 +832,20 @@ function Summary({ result, equipped, data, hasWeapon }) {
             <span className="mh-res-v" style={{ color: result.res[k] < 0 ? "#d1603a" : result.res[k] > 0 ? "#5fae7f" : "#a2957b" }}>{result.res[k] > 0 ? "+" : ""}{result.res[k]}</span></div>
         ))}
       </div>
-      {result.activeBonuses.length > 0 && (
-        <div className="mh-bonuses"><div className="mh-eyebrow">Bonus attivi</div>
-          {result.activeBonuses.map(b => (
-            <div className={"mh-bonus" + (b.kind === "group" ? " mh-bonus-gold" : "")} key={b.id}>
-              <b>{b.name}</b> <span className="mh-bonus-src">{b.kind === "group" ? "gruppo" : "set"} · {b.have} pz</span>
-              {b.desc && <><br/><span className="mh-bonus-d">{b.desc}</span></>}</div>
+      {result.bonusList.length > 0 && (
+        <div className="mh-bonuses"><div className="mh-eyebrow">Bonus di set</div>
+          {result.bonusList.map(b => (
+            <div className={"mh-bonus" + (b.kind === "group" ? " mh-bonus-gold" : "") + (b.anyUnlocked ? "" : " mh-bonus-locked")} key={b.id}>
+              <div className="mh-bonus-hd"><b>{b.name}</b> <span className="mh-bonus-src">{b.kind === "group" ? "gruppo" : "set"} · {b.have} pz{b.anyUnlocked ? "" : b.nextAt ? ` · sblocca a ${b.nextAt}` : ""}</span></div>
+              <div className="mh-bonus-ths">
+                {b.thresholds.map((t, i) => (
+                  <div className={"mh-bonus-th " + (t.unlocked ? "on" : "off")} key={i}>
+                    <span className="mh-bonus-thn">{t.unlocked ? "✓" : "🔒"} {t.pieces} pz</span>
+                    <span className="mh-bonus-thd">{t.desc || "—"}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
       )}
@@ -606,6 +884,91 @@ function Summary({ result, equipped, data, hasWeapon }) {
   );
 }
 
+/* ------------------------- risorse / tracker materiali -------------------- */
+const MATCOLOR = { gray:"#8f8f8f", grey:"#8f8f8f", white:"#d8d2c4", red:"#c0532f", blue:"#3f7fc0",
+  green:"#5a9e5a", yellow:"#d9b13b", gold:"#e0b83c", pink:"#cf7fa0", purple:"#9a6fc9",
+  orange:"#d0812f", brown:"#8a6a44", black:"#4a4030", cyan:"#5bb8c9", lightblue:"#6bb8c9" };
+const matDot = (c) => MATCOLOR[(c || "").toLowerCase()] || (c || "#8a7a5a");
+
+// Somma i materiali dell'intera build corrente: arma (intero albero) + pezzi d'armatura + charm
+// (costo cumulativo dei ranghi). I gioielli non sono inclusi: sono drop casuali, non si forgiano.
+function aggregateMaterials(lo, ctx) {
+  const { pieceById, weaponById, charmById } = ctx;
+  const acc = {}; let zenny = 0;
+  const addFrom = (mats, z) => {
+    (mats || []).forEach(m => {
+      if (m.id == null) return;
+      if (!acc[m.id]) acc[m.id] = { id: m.id, name: m.name, icon: m.icon || {}, need: 0 };
+      acc[m.id].need += m.qty || 0;
+    });
+    zenny += z || 0;
+  };
+  const w = weaponById[lo.weapon];
+  if (w && w.id !== "w0") addFrom(w.mats, w.zenny);
+  for (const s of SLOTS) { const p = pieceById[lo.pieces[s]]; if (p) addFrom(p.mats, p.zenny); }
+  const ch = charmById && charmById[lo.charm];
+  if (ch && lo.charm !== "c0") addFrom(ch.mats, ch.zenny);
+  return { list: Object.values(acc), zenny };
+}
+
+function Resources({ materials, owned, setOwned, goBuild }) {
+  const { list, zenny } = materials;
+  if (!list.length)
+    return <div className="mh-compare"><p className="mh-empty big">Equipaggia un'arma o dell'armatura nel <button className="mh-link" onClick={goBuild}>Costruttore</button> per vedere i materiali necessari alla build.</p></div>;
+
+  const setOne = (id, v) => setOwned({ ...owned, [id]: Math.max(0, v | 0) });
+  const rows = list.map(m => {
+    const have = Math.max(0, owned[m.id] || 0);
+    return { ...m, have, done: have >= m.need, remain: Math.max(0, m.need - have) };
+  }).sort((a, b) => (a.done - b.done) || (b.remain - a.remain) || a.name.localeCompare(b.name));
+
+  const doneCount = rows.filter(r => r.done).length;
+  const pct = Math.round(doneCount / rows.length * 100);
+  const clearOwned = () => { const next = { ...owned }; rows.forEach(r => delete next[r.id]); setOwned(next); };
+
+  return (
+    <div className="mh-trk">
+      <div className="mh-trk-head">
+        <div className="mh-trk-prog">
+          <div className="mh-trk-progbar"><div className="mh-trk-progfill" style={{ width: pct + "%" }} /></div>
+          <span className="mh-trk-progl">{doneCount}/{rows.length} materiali completati · {pct}%</span>
+        </div>
+        <div className="mh-trk-meta">
+          <span>Zenny <b>{zenny.toLocaleString("it-IT")}</b></span>
+          <button className="mh-link" onClick={clearOwned}>azzera posseduti</button>
+        </div>
+      </div>
+      <p className="mh-trk-note">Include l'intero albero di potenziamento dell'arma, il crafting di ogni pezzo d'armatura e i ranghi del charm. I gioielli sono esclusi: sono drop casuali, non si forgiano. Segna quanto ne possiedi: l'inventario resta salvato tra le sessioni.</p>
+      <div className="mh-ctablewrap"><table className="mh-mattable">
+        <thead><tr><th className="mh-ccorner">Materiale</th><th>Serve</th><th>Hai</th><th>Manca</th></tr></thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.id} className={r.done ? "matdone" : ""}>
+              <td className="mh-matname">
+                <span className="mh-matname-in">
+                  <span className="mh-matdot" style={{ background: matDot(r.icon && r.icon.color) }} />
+                  <span className="mh-matname-t">{r.name}</span>{r.done && <span className="mh-matcheck">✓</span>}
+                </span>
+              </td>
+              <td className="mh-matneed">{r.need}</td>
+              <td>
+                <span className="mh-stepper">
+                  <button onClick={() => setOne(r.id, r.have - 1)} disabled={r.have <= 0}>−</button>
+                  <input className="mh-matinput" type="number" min="0" value={r.have}
+                    onChange={e => setOne(r.id, Number(e.target.value))} />
+                  <button onClick={() => setOne(r.id, r.have + 1)}>+</button>
+                </span>
+              </td>
+              <td className={r.remain === 0 ? "mh-matok" : "mh-matrem"}>{r.remain === 0 ? "—" : r.remain}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
+      <button className="mh-link" onClick={goBuild}>← Torna al costruttore</button>
+    </div>
+  );
+}
+
 /* ------------------------- confronto -------------------------------------- */
 function Compare({ builds, del, load, goBuild }) {
   if (builds.length === 0)
@@ -630,6 +993,7 @@ function Compare({ builds, del, load, goBuild }) {
           <tr className="mh-crow-stat"><td>Voto</td>{builds.map(b => <td key={b.id} className={maxOverall > 0 && (b.overall || 0) === maxOverall ? "best" : ""}>{b.overall ?? "–"}</td>)}</tr>
           <tr><td>Offesa</td>{builds.map(b => <td key={b.id}>{b.offense ?? "–"}</td>)}</tr>
           <tr><td>Sopravv.</td>{builds.map(b => <td key={b.id}>{b.survival ?? "–"}</td>)}</tr>
+          <tr><td>Comfort</td>{builds.map(b => <td key={b.id}>{b.qol ?? "–"}</td>)}</tr>
           <tr><td>EFR</td>{builds.map(b => <td key={b.id} className={maxEfr > 0 && (b.efr || 0) === maxEfr ? "best" : ""}>{b.efr || "–"}</td>)}</tr>
           <tr className="mh-crow-stat"><td>Difesa</td>{builds.map(b => <td key={b.id} className={b.def === maxDef ? "best" : ""}>{b.def}</td>)}</tr>
           <tr><td>Attacco</td>{builds.map(b => <td key={b.id}>{b.atk || "–"}</td>)}</tr>
@@ -651,22 +1015,50 @@ function Compare({ builds, del, load, goBuild }) {
 }
 
 /* ------------------------- picker ----------------------------------------- */
+/* etichette elemento/stato (i dati usano codici inglesi) + configurazioni di ordinamento */
+const ELSTLABEL = { fire:"Fuoco", water:"Acqua", thunder:"Tuono", ice:"Ghiaccio", dragon:"Drago",
+  poison:"Veleno", paralysis:"Paralisi", sleep:"Sonno", blastblight:"Esplosione", none:"Nessuno" };
+const slotSum = (o) => (o.slots || []).reduce((a, s) => a + s, 0);
+const weaponEl = (w) => (w.el && w.el[0]) || (w.st && w.st[0]) || "none";
+const WSORT = [
+  ["raw", "Attacco ↓", (a, b) => b.raw - a.raw || a.name.localeCompare(b.name)],
+  ["aff", "Affinità ↓", (a, b) => b.aff - a.aff || b.raw - a.raw],
+  ["rarity", "Rarità ↓", (a, b) => b.rarity - a.rarity || b.raw - a.raw],
+  ["slots", "Slot ↓", (a, b) => slotSum(b) - slotSum(a) || b.raw - a.raw],
+  ["name", "Nome A-Z", (a, b) => a.name.localeCompare(b.name)],
+];
+const PSORT = [
+  ["name", "Nome A-Z", (a, b) => a.setName.localeCompare(b.setName)],
+  ["def", "Difesa ↓", (a, b) => b.def - a.def || a.setName.localeCompare(b.setName)],
+  ["slots", "Slot ↓", (a, b) => slotSum(b) - slotSum(a) || a.setName.localeCompare(b.setName)],
+];
+const cmpOf = (cfg, key) => (cfg.find(s => s[0] === key) || [])[2];
+
 function PiecePicker({ options, value, onChange, data }) {
-  const [open, setOpen] = useState(false); const [q, setQ] = useState(""); const ref = useRef(null);
+  const [open, setOpen] = useState(false); const [q, setQ] = useState(""); const [sort, setSort] = useState("name"); const ref = useRef(null);
   useEffect(() => { const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
   const sel = options.find(o => o.id === value); const ql = q.toLowerCase();
-  const filtered = ql ? options.filter(o => (o.setName + " " + skillsText(o, data)).toLowerCase().includes(ql)) : options;
+  const filtered = useMemo(() => {
+    let arr = ql ? options.filter(o => (o.setName + " " + skillsText(o, data)).toLowerCase().includes(ql)) : options.slice();
+    const cmp = cmpOf(PSORT, sort); if (cmp) arr = arr.slice().sort(cmp);
+    return arr;
+  }, [options, q, sort, data]);
   return (
     <div className="mh-picker" ref={ref}>
       <button className="mh-select mh-pickbtn" onClick={() => setOpen(o => !o)}>{sel ? sel.setName : <span className="mh-ph">— vuoto —</span>}<span className="mh-caret">▾</span></button>
       {open && (
         <div className="mh-pickpop">
-          <input autoFocus className="mh-input mh-picksearch" placeholder="Cerca set o abilità…" value={q} onChange={e => setQ(e.target.value)} />
+          <div className="mh-pickctrls">
+            <select className="mh-select mh-select-sm" value={sort} onChange={e => setSort(e.target.value)} title="Ordina per">
+              {PSORT.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+            <input autoFocus className="mh-input mh-picksearch" placeholder="Cerca set o abilità…" value={q} onChange={e => setQ(e.target.value)} />
+          </div>
           <div className="mh-picklist">
             <button className="mh-pickitem" onClick={() => { onChange(""); setOpen(false); setQ(""); }}>— vuoto —</button>
             {filtered.slice(0, 200).map(o => (
               <button key={o.id} className={"mh-pickitem" + (o.id === value ? " sel" : "")} onClick={() => { onChange(o.id); setOpen(false); setQ(""); }}>
-                <span className="mh-pickname">{o.setName} <em>{rankLabel(o.rank)}</em></span>
+                <span className="mh-pickname">{o.setName} <em>Dif {o.def}{o.slots.length ? " · slot " + o.slots.join("/") : ""}</em></span>
                 <span className="mh-picksk">{skillsText(o, data)}</span></button>
             ))}
             {filtered.length === 0 && <div className="mh-empty" style={{ padding: "8px 10px" }}>Nessun risultato.</div>}
@@ -677,30 +1069,48 @@ function PiecePicker({ options, value, onChange, data }) {
   );
 }
 function WeaponPicker({ weapons, value, onChange, data }) {
-  const [open, setOpen] = useState(false); const [q, setQ] = useState(""); const [kind, setKind] = useState(""); const ref = useRef(null);
+  const [open, setOpen] = useState(false); const [q, setQ] = useState(""); const [kind, setKind] = useState(""); const [elem, setElem] = useState(""); const [sort, setSort] = useState("raw"); const ref = useRef(null);
   useEffect(() => { const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
   const sel = weapons.find(w => w.id === value); const ql = q.toLowerCase();
   const kinds = useMemo(() => Array.from(new Set(weapons.filter(w => w.id !== "w0").map(w => w.kind))), [weapons]);
-  const filtered = weapons.filter(w => w.id !== "w0" && (!kind || w.kind === kind) && (!ql || w.name.toLowerCase().includes(ql)));
+  const elems = useMemo(() => {
+    const s = new Set(); weapons.forEach(w => { if (w.id !== "w0") s.add(weaponEl(w)); });
+    return [...s].sort((a, b) => a === "none" ? 1 : b === "none" ? -1 : (ELSTLABEL[a] || a).localeCompare(ELSTLABEL[b] || b));
+  }, [weapons]);
+  const filtered = useMemo(() => {
+    let arr = weapons.filter(w => w.id !== "w0" && (!kind || w.kind === kind) && (!elem || weaponEl(w) === elem) && (!ql || w.name.toLowerCase().includes(ql)));
+    const cmp = cmpOf(WSORT, sort); if (cmp) arr = arr.slice().sort(cmp);
+    return arr;
+  }, [weapons, kind, elem, sort, q]);
   return (
     <div className="mh-picker" ref={ref}>
       <button className="mh-select mh-pickbtn" onClick={() => setOpen(o => !o)}>{sel && sel.id !== "w0" ? sel.name : <span className="mh-ph">— nessuna arma —</span>}<span className="mh-caret">▾</span></button>
       {open && (
         <div className="mh-pickpop">
-          <div className="mh-pickrow">
-            <select className="mh-select mh-select-sm" value={kind} onChange={e => setKind(e.target.value)}>
-              <option value="">Tutte</option>
+          <div className="mh-pickctrls">
+            <select className="mh-select mh-select-sm" value={kind} onChange={e => setKind(e.target.value)} title="Tipo d'arma">
+              <option value="">Ogni tipo</option>
               {kinds.map(k => <option key={k} value={k}>{WKINDS[k] || k}</option>)}
+            </select>
+            <select className="mh-select mh-select-sm" value={elem} onChange={e => setElem(e.target.value)} title="Elemento / stato">
+              <option value="">Ogni elem.</option>
+              {elems.map(k => <option key={k} value={k}>{ELSTLABEL[k] || k}</option>)}
+            </select>
+            <select className="mh-select mh-select-sm" value={sort} onChange={e => setSort(e.target.value)} title="Ordina per">
+              {WSORT.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
             </select>
             <input autoFocus className="mh-input mh-picksearch" placeholder="Cerca arma…" value={q} onChange={e => setQ(e.target.value)} />
           </div>
           <div className="mh-picklist">
             <button className="mh-pickitem" onClick={() => { onChange("w0"); setOpen(false); setQ(""); }}>— nessuna arma —</button>
-            {filtered.slice(0, 200).map(w => (
-              <button key={w.id} className={"mh-pickitem" + (w.id === value ? " sel" : "")} onClick={() => { onChange(w.id); setOpen(false); setQ(""); }}>
-                <span className="mh-pickname">{w.name} <em>{WKINDS[w.kind] || w.kind}</em></span>
-                <span className="mh-picksk">Att {w.raw} · Aff {w.aff}%{w.slots.length ? " · slot " + w.slots.join("/") : ""}</span></button>
-            ))}
+            {filtered.slice(0, 200).map(w => {
+              const dmg = w.el || w.st;
+              return (
+                <button key={w.id} className={"mh-pickitem" + (w.id === value ? " sel" : "")} onClick={() => { onChange(w.id); setOpen(false); setQ(""); }}>
+                  <span className="mh-pickname">{w.name} <em>{WKINDS[w.kind] || w.kind}</em></span>
+                  <span className="mh-picksk">Att {w.raw} · Aff {w.aff}% · R{w.rarity}{dmg ? " · " + (ELSTLABEL[dmg[0]] || dmg[0]) + " " + dmg[1] : ""}{w.slots.length ? " · slot " + w.slots.join("/") : ""}</span></button>
+              );
+            })}
             {filtered.length === 0 && <div className="mh-empty" style={{ padding: "8px 10px" }}>Nessun risultato.</div>}
           </div>
         </div>
@@ -881,6 +1291,34 @@ const CSS = `
 .mh-sub{margin:2px 0 0;font-size:11px;color:var(--muted);letter-spacing:.16em;text-transform:uppercase;}
 .mh-badge{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:5px 10px;border-radius:20px;border:1px solid var(--line);text-align:center;}
 .mh-badge.live{color:var(--jade);border-color:#33513f;} .mh-badge.offline{color:var(--ember);border-color:#5a3226;}
+.mh-header{flex-wrap:wrap;}
+.mh-acct{display:inline-flex;align-items:center;gap:7px;background:#0f0b07;border:1px solid var(--line);color:var(--muted);border-radius:20px;padding:5px 12px;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:12px;letter-spacing:.04em;cursor:pointer;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.mh-acct:hover{border-color:var(--gold-dim);color:var(--bone);}
+.mh-acct.on{color:var(--jade);border-color:#33513f;}
+.mh-acct-dot{width:8px;height:8px;border-radius:50%;background:#5a4a3a;flex:none;}
+.mh-acct.on .mh-acct-dot,.mh-acct-dot.on{background:var(--jade);box-shadow:0 0 6px rgba(95,174,127,.6);}
+.mh-modal{position:fixed;inset:0;z-index:100;background:rgba(6,4,2,.72);display:flex;align-items:center;justify-content:center;padding:18px;}
+.mh-modal-card{background:linear-gradient(180deg,#1c160e,#161009);border:1px solid var(--gold-dim);border-radius:14px;width:100%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,.6);overflow:hidden;}
+.mh-modal-h{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line);font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:.1em;text-transform:uppercase;font-size:13px;color:var(--gold);}
+.mh-modal-x{background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 2px;} .mh-modal-x:hover{color:var(--ember);}
+.mh-acctbody{padding:16px;display:flex;flex-direction:column;gap:12px;}
+.mh-gbtn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;background:#fff;color:#3c4043;border:none;border-radius:7px;padding:10px;font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:.04em;font-size:13.5px;cursor:pointer;}
+.mh-gbtn:hover{background:#f1f1f1;}
+.mh-gicon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:#fff;color:#4285F4;font-weight:800;font-size:13px;box-shadow:0 0 0 1px #dadce0 inset;}
+.mh-or{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;}
+.mh-or::before,.mh-or::after{content:"";flex:1;height:1px;background:var(--line);}
+.mh-acct-tabs{display:flex;gap:6px;}
+.mh-acct-tabs button{flex:1;background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:7px;padding:7px;font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.06em;text-transform:uppercase;font-size:11.5px;cursor:pointer;}
+.mh-acct-tabs button.on{color:var(--gold);border-color:var(--gold-dim);background:#0f0b07;}
+.mh-fld{display:flex;flex-direction:column;gap:4px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);}
+.mh-fld .mh-input{flex:none;width:100%;box-sizing:border-box;}
+.mh-acct-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:2px;}
+.mh-acct-note{font-size:12px;color:var(--muted);line-height:1.5;margin:0;}
+.mh-acct-note i{color:var(--gold-dim);font-style:normal;}
+.mh-acct-status{font-size:13px;color:var(--bone);margin:0;display:flex;align-items:center;gap:8px;}
+.mh-acct-err{font-size:12px;color:var(--ember);margin:0;line-height:1.4;}
+.mh-acct-ok{font-size:12px;color:var(--jade);margin:0;line-height:1.4;}
+.mh-syncmsg{font-size:11px;color:var(--muted);margin:6px 0 0;font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.04em;text-align:right;}
 .mh-tabs{max-width:1140px;margin:0 auto;padding:14px 18px 0;display:flex;gap:8px;}
 .mh-tabs button{background:transparent;border:1px solid var(--line);color:var(--muted);font-family:'Rajdhani',sans-serif;font-weight:600;font-size:13px;letter-spacing:.1em;text-transform:uppercase;padding:8px 16px;border-radius:8px 8px 0 0;cursor:pointer;}
 .mh-tabs button.on{color:var(--gold);border-color:var(--gold-dim);border-bottom-color:var(--bg);background:var(--panel);}
@@ -903,6 +1341,9 @@ const CSS = `
 .mh-ph{color:var(--muted);} .mh-caret{color:var(--gold-dim);font-size:11px;}
 .mh-pickpop{position:absolute;z-index:30;left:0;right:0;top:calc(100% + 4px);background:#120d08;border:1px solid var(--gold-dim);border-radius:9px;box-shadow:0 12px 30px rgba(0,0,0,.6);overflow:hidden;}
 .mh-pickrow{display:flex;gap:6px;padding:8px 8px 0;} .mh-pickrow .mh-select{flex:0 0 42%;} .mh-pickrow .mh-picksearch{flex:1;margin:0;}
+.mh-pickctrls{display:flex;flex-wrap:wrap;gap:6px;padding:8px 8px 0;}
+.mh-pickctrls .mh-select{flex:1 1 auto;width:auto;min-width:0;}
+.mh-pickctrls .mh-picksearch{flex:1 1 100%;margin:0;width:auto;}
 .mh-picksearch{margin:8px;width:calc(100% - 16px);}
 .mh-picklist{max-height:280px;overflow-y:auto;}
 .mh-pickitem{display:block;width:100%;text-align:left;background:transparent;border:none;border-top:1px solid #241c11;color:var(--bone);padding:8px 11px;cursor:pointer;}
@@ -934,6 +1375,13 @@ const CSS = `
 .mh-bonus{background:#0f0b07;border:1px solid var(--line);border-left:3px solid var(--jade);border-radius:6px;padding:7px 10px;margin-bottom:6px;font-size:12.5px;line-height:1.4;}
 .mh-bonus b{color:var(--bone);} .mh-bonus-src{color:var(--muted);font-size:11px;} .mh-bonus-d{color:var(--muted);}
 .mh-bonus-gold{border-left-color:var(--gold);} .mh-bonus-gold b{color:var(--gold);}
+.mh-bonus-locked{border-left-color:#4a4030;} .mh-bonus-locked b{color:var(--muted);}
+.mh-bonus-hd{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;}
+.mh-bonus-ths{margin-top:6px;display:flex;flex-direction:column;gap:4px;}
+.mh-bonus-th{display:flex;gap:8px;font-size:11.5px;line-height:1.35;}
+.mh-bonus-thn{flex:none;font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:.03em;white-space:nowrap;}
+.mh-bonus-th.on{color:var(--bone);} .mh-bonus-th.on .mh-bonus-thn{color:var(--jade);}
+.mh-bonus-th.off{color:#6b5f49;} .mh-bonus-th.off .mh-bonus-thn{color:#6b5f49;}
 .mh-skilllist{display:flex;flex-direction:column;gap:8px;}
 .mh-skill{cursor:pointer;}
 .mh-skill-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;}
@@ -993,6 +1441,7 @@ const CSS = `
 .mh-sbar-fill{height:100%;border-radius:5px;transition:width .25s;}
 .mh-sbar-fill.off{background:linear-gradient(90deg,#b5832b,#f0b03e);}
 .mh-sbar-fill.surv{background:linear-gradient(90deg,#3d6d5a,#6bb8c9);}
+.mh-sbar-fill.qol{background:linear-gradient(90deg,#5a4a8a,#9a6fc9);}
 .mh-sbar-v{flex:none;width:24px;text-align:right;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:13px;color:var(--bone);}
 .mh-score-meta{display:flex;flex-wrap:wrap;gap:12px;font-size:11.5px;color:var(--muted);}
 .mh-score-meta b{color:var(--bone);font-family:'Rajdhani',sans-serif;font-weight:700;font-size:13px;margin-left:2px;}
@@ -1031,6 +1480,36 @@ const CSS = `
 .mh-artian-grid input,.mh-artian-grid select{background:#0f0b07;border:1px solid var(--line);border-radius:6px;color:var(--bone);padding:7px 8px;font-size:13px;font-family:inherit;width:100%;appearance:none;}
 .mh-artian-grid input:focus,.mh-artian-grid select:focus{outline:2px solid var(--gold);border-color:var(--gold);}
 .mh-artian-grid input:disabled{opacity:.4;}
+.mh-trk{max-width:820px;margin:0 auto;padding:0 4px;}
+.mh-trk-head{display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.mh-trk-prog{flex:1;min-width:200px;}
+.mh-trk-progbar{height:9px;background:#2a2114;border:1px solid #342810;border-radius:5px;overflow:hidden;}
+.mh-trk-progfill{height:100%;background:linear-gradient(90deg,#3d6d4a,#5fae7f);border-radius:5px;transition:width .25s;}
+.mh-trk-progl{display:block;margin-top:5px;font-size:11.5px;color:var(--muted);font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.04em;}
+.mh-trk-meta{display:flex;align-items:center;gap:14px;font-size:12px;color:var(--muted);}
+.mh-trk-meta b{color:var(--gold);font-family:'Rajdhani',sans-serif;font-weight:700;font-size:15px;margin-left:3px;}
+.mh-trk-note{font-size:11.5px;color:var(--muted);line-height:1.55;margin:0 0 12px;}
+.mh-mattable{border-collapse:collapse;width:100%;table-layout:fixed;}
+.mh-mattable th,.mh-mattable td{padding:8px 8px;text-align:center;border-bottom:1px solid #241c11;font-size:13px;overflow-wrap:anywhere;}
+.mh-mattable thead th{background:#0f0b07;position:sticky;top:0;font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--gold-dim);font-size:11px;}
+.mh-mattable th:nth-child(2),.mh-mattable td:nth-child(2){width:52px;}
+.mh-mattable th:nth-child(3),.mh-mattable td:nth-child(3){width:120px;}
+.mh-mattable th:nth-child(4),.mh-mattable td:nth-child(4){width:56px;}
+.mh-mattable th.mh-ccorner,.mh-matname{text-align:left!important;}
+.mh-matname{vertical-align:middle;color:var(--bone);}
+.mh-matname-in{display:flex;align-items:center;gap:9px;min-width:0;line-height:1.35;}
+.mh-matname-t{min-width:0;}
+.mh-mattable td{vertical-align:middle;}
+.mh-matdot{width:11px;height:11px;border-radius:50%;flex:none;border:1px solid rgba(0,0,0,.4);box-shadow:0 0 0 1px rgba(255,255,255,.06);}
+.mh-matcheck{color:#5fae7f;font-weight:700;margin-left:2px;}
+.mh-matneed{font-family:'Rajdhani',sans-serif;font-weight:700;color:var(--bone);font-variant-numeric:tabular-nums;}
+.mh-matinput{width:42px;background:#0f0b07;border:1px solid var(--line);border-radius:5px;color:var(--bone);text-align:center;padding:4px 2px;font-size:13px;font-family:inherit;appearance:textfield;font-variant-numeric:tabular-nums;}
+.mh-matinput::-webkit-outer-spin-button,.mh-matinput::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+.mh-mattable td .mh-stepper{justify-content:center;gap:4px;}
+.mh-matrem{color:var(--ember);font-family:'Rajdhani',sans-serif;font-weight:700;font-variant-numeric:tabular-nums;}
+.mh-matok{color:#4a4030;}
+.mh-mattable tr.matdone .mh-matname{color:var(--muted);}
+.mh-mattable tr.matdone{background:rgba(95,174,127,.06);}
 `;
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
