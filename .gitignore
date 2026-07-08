@@ -4,3 +4,6 @@ node_modules/
 
 # config locale editor/agent
 .claude/
+
+# build offline a file singolo, generato da tools/build.js (rigenerabile)
+mhwilds-standalone.html
