@@ -1,0 +1,6 @@
+# dipendenze dei tool di build (rigenerabili con `npm install` in tools/)
+tools/node_modules/
+node_modules/
+
+# config locale editor/agent
+.claude/

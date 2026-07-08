@@ -1,0 +1,16 @@
+{
+  "name": "mhwilds-planner-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Toolchain per rigenerare la versione standalone del pianificatore MH Wilds",
+  "scripts": {
+    "db": "node fetch-db.js",
+    "build": "node build.js"
+  },
+  "dependencies": {
+    "@babel/standalone": "^7"
+  },
+  "devDependencies": {
+    "jsdom": "^24"
+  }
+}
