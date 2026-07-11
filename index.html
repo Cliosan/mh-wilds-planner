@@ -325,15 +325,21 @@ function Shell({ data, sync }) {
   return (
     <div className="mh-root"><style>{CSS}</style>
       <header className="mh-header">
-        <div className="mh-crest">◆</div>
-        <div className="mh-titlewrap"><h1>Pianificatore Build</h1><p className="mh-sub">Monster Hunter Wilds</p></div>
-        <span className={"mh-badge " + (data.source === "sample" ? "offline" : "live")}>{srcLabel}</span>
-        <AccountBar sync={sync} />
+        <div className="mh-brand">
+          <ArmorImg src="assets/monster-hunter-wilds-logo.png" alt="Monster Hunter Wilds"
+            className="mh-logo" fallback={<div className="mh-crest">◆</div>} />
+          <div className="mh-titlewrap"><h1>Pianificatore Build</h1><p className="mh-sub">Monster Hunter Wilds</p></div>
+        </div>
+        <div className="mh-headmeta">
+          <span className={"mh-badge " + (data.source === "sample" ? "offline" : "live")}>{srcLabel}</span>
+          <AccountBar sync={sync} />
+        </div>
       </header>
       <nav className="mh-tabs">
-        <button className={tab === "build" ? "on" : ""} onClick={() => setTab("build")}>Costruttore</button>
-        <button className={tab === "resources" ? "on" : ""} onClick={() => setTab("resources")}>Risorse</button>
-        <button className={tab === "compare" ? "on" : ""} onClick={() => setTab("compare")}>Confronto</button>
+        <button className={tab === "build" ? "on" : ""} onClick={() => setTab("build")}><span className="mh-tab-ic">⬢</span>Costruttore</button>
+        <button className={tab === "resources" ? "on" : ""} onClick={() => setTab("resources")}><span className="mh-tab-ic">◈</span>Risorse</button>
+        <button className={tab === "inventory" ? "on" : ""} onClick={() => setTab("inventory")}><span className="mh-tab-ic">▤</span>Inventario</button>
+        <button className={tab === "compare" ? "on" : ""} onClick={() => setTab("compare")}><span className="mh-tab-ic">⇆</span>Confronto</button>
       </nav>
       <Planner data={data} tab={tab} setTab={setTab} sync={sync} />
       {data.source === "sample" && <p className="mh-footer">Non è stato possibile scaricare il database né trovarne una copia locale. Stai usando un piccolo campione. Riapri l'app dove la rete è consentita per scaricare (una volta sola) l'intero database.</p>}
@@ -451,6 +457,7 @@ function emptyLoadout() { return { weapon: "w0", pieces: { head:"", chest:"", ar
 function Planner({ data, tab, setTab, sync }) {
   const [lo, setLo] = useState(emptyLoadout);
   const [builds, setBuilds] = useState([]);
+  const [selIds, setSelIds] = useState([]); // build selezionate nell'Inventario per il confronto
   const [name, setName] = useState("");
   const [owned, setOwned] = useState({});
   const [syncMsg, setSyncMsg] = useState("");
@@ -541,10 +548,15 @@ function Planner({ data, tab, setTab, sync }) {
       bonuses: result.activeBonuses.map(b => `${b.name} (${b.have} pz)`) }]);
     setName("");
   };
-  const del = (id) => persist(builds.filter(b => b.id !== id));
+  const del = (id) => { persist(builds.filter(b => b.id !== id)); setSelIds(s => s.filter(x => x !== id)); };
   const load = (b) => { if (b.lo) { setLo({ weapon: b.lo.weapon || "w0", pieces: { ...emptyLoadout().pieces, ...b.lo.pieces }, charm: b.lo.charm || "c0", decos: { ...b.lo.decos }, wmods: b.lo.wmods ? { ...b.lo.wmods } : {}, cskills: b.lo.cskills ? [...b.lo.cskills] : [] }); setName(b.name); } };
 
-  if (tab === "compare") return <Compare builds={builds} del={del} load={(b) => { load(b); setTab("build"); }} goBuild={() => setTab("build")} />;
+  const toggleSel = (id) => setSelIds(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+  const selectedBuilds = builds.filter(b => selIds.includes(b.id));
+  const compareBuilds = selectedBuilds.length ? selectedBuilds : builds;
+
+  if (tab === "inventory") return <Inventory builds={builds} selIds={selIds} setSelIds={setSelIds} toggleSel={toggleSel} del={del} load={(b) => { load(b); setTab("build"); }} goBuild={() => setTab("build")} goCompare={() => setTab("compare")} pieceById={pieceById} />;
+  if (tab === "compare") return <Compare builds={compareBuilds} filtered={selectedBuilds.length > 0} totalCount={builds.length} del={del} load={(b) => { load(b); setTab("build"); }} goBuild={() => setTab("build")} goInventory={() => setTab("inventory")} clearSel={() => setSelIds([])} />;
   if (tab === "resources") return <Resources materials={materials} owned={owned} setOwned={persistOwned} goBuild={() => setTab("build")} />;
 
   const weapon = weaponById[lo.weapon];
@@ -820,13 +832,29 @@ const RARITY_COL = { 1:"#b9bcc2", 2:"#c3cbd1", 3:"#8fd06a", 4:"#63c47b", 5:"#3fb
 const rarCol = (r) => RARITY_COL[r] || "#8a8f98";
 
 /* mappa id-set MHDB -> { slot: nomeFileIcona } ; immagini in assets/armor/<icona>.webp */
-const ARMOR_IMG = {"1":{"head":"tex_ch02_00_020_0_0_IMLM4","chest":"tex_ch02_00_020_0_1_IMLM4","arms":"tex_ch02_00_020_0_2_IMLM4","waist":"tex_ch02_00_020_0_3_IMLM4","legs":"tex_ch02_00_020_0_4_IMLM4"},"3":{"head":"tex_ch02_00_107_0_0_IMLM4","chest":"tex_ch02_00_107_0_1_IMLM4","arms":"tex_ch02_00_107_0_2_IMLM4","waist":"tex_ch02_00_107_0_3_IMLM4","legs":"tex_ch02_00_107_0_4_IMLM4"},"4":{"head":"tex_ch02_00_091_0_0_IMLM4","chest":"tex_ch02_00_091_0_1_IMLM4","arms":"tex_ch02_00_091_0_2_IMLM4","waist":"tex_ch02_00_091_0_3_IMLM4","legs":"tex_ch02_00_091_0_4_IMLM4"},"5":{"head":"tex_ch02_00_135_0_0_IMLM4","chest":"tex_ch02_00_135_0_1_IMLM4","arms":"tex_ch02_00_135_0_2_IMLM4","waist":"tex_ch02_00_135_0_3_IMLM4","legs":"tex_ch02_00_135_0_4_IMLM4"},"6":{"head":"tex_ch02_00_016_0_0_IMLM4","chest":"tex_ch02_00_016_0_1_IMLM4","arms":"tex_ch02_00_016_0_2_IMLM4","waist":"tex_ch02_00_016_0_3_IMLM4","legs":"tex_ch02_00_016_0_4_IMLM4"},"8":{"head":"tex_ch02_00_007_0_0_IMLM4","chest":"tex_ch02_00_007_0_1_IMLM4","arms":"tex_ch02_00_007_0_2_IMLM4","waist":"tex_ch02_00_007_0_3_IMLM4","legs":"tex_ch02_00_007_0_4_IMLM4"},"9":{"head":"tex_ch02_00_103_0_0_IMLM4","chest":"tex_ch02_00_103_0_1_IMLM4","arms":"tex_ch02_00_103_0_2_IMLM4","waist":"tex_ch02_00_103_0_3_IMLM4","legs":"tex_ch02_00_103_0_4_IMLM4"},"10":{"head":"tex_ch02_00_017_0_0_IMLM4","chest":"tex_ch02_00_017_0_1_IMLM4","arms":"tex_ch02_00_017_0_2_IMLM4","waist":"tex_ch02_00_017_0_3_IMLM4","legs":"tex_ch02_00_017_0_4_IMLM4"},"11":{"head":"tex_ch02_00_005_0_0_IMLM4","chest":"tex_ch02_00_005_0_1_IMLM4","arms":"tex_ch02_00_005_0_2_IMLM4","waist":"tex_ch02_00_005_0_3_IMLM4","legs":"tex_ch02_00_005_0_4_IMLM4"},"14":{"head":"tex_ch02_00_033_0_0_IMLM4","chest":"tex_ch02_00_033_0_1_IMLM4","arms":"tex_ch02_00_033_0_2_IMLM4","waist":"tex_ch02_00_033_0_3_IMLM4","legs":"tex_ch02_00_033_0_4_IMLM4"},"15":{"head":"tex_ch02_00_123_0_0_IMLM4","chest":"tex_ch02_00_123_0_1_IMLM4","waist":"tex_ch02_00_123_0_3_IMLM4","legs":"tex_ch02_00_123_0_4_IMLM4"},"16":{"head":"tex_ch02_00_075_0_0_IMLM4","chest":"tex_ch02_00_075_0_1_IMLM4","arms":"tex_ch02_00_075_0_2_IMLM4","waist":"tex_ch02_00_075_0_3_IMLM4","legs":"tex_ch02_00_075_0_4_IMLM4"},"17":{"head":"tex_ch02_00_014_0_0_IMLM4"},"19":{"head":"tex_ch02_00_024_0_0_IMLM4","chest":"tex_ch02_00_024_0_1_IMLM4","arms":"tex_ch02_00_024_0_2_IMLM4","waist":"tex_ch02_00_024_0_3_IMLM4","legs":"tex_ch02_00_024_0_4_IMLM4"},"20":{"head":"tex_ch02_00_126_0_0_IMLM4","chest":"tex_ch02_00_126_0_1_IMLM4"},"21":{"head":"tex_ch02_00_020_0_0_IMLM4","chest":"tex_ch02_00_020_0_1_IMLM4","arms":"tex_ch02_00_020_0_2_IMLM4","waist":"tex_ch02_00_020_0_3_IMLM4","legs":"tex_ch02_00_020_0_4_IMLM4"},"22":{"head":"tex_ch02_00_109_0_0_IMLM4","chest":"tex_ch02_00_109_0_1_IMLM4","arms":"tex_ch02_00_109_0_2_IMLM4","waist":"tex_ch02_00_109_0_3_IMLM4","legs":"tex_ch02_00_109_0_4_IMLM4"},"23":{"head":"tex_ch02_00_059_0_0_IMLM4","chest":"tex_ch02_00_059_0_1_IMLM4","arms":"tex_ch02_00_059_0_2_IMLM4","waist":"tex_ch02_00_059_0_3_IMLM4","legs":"tex_ch02_00_059_0_4_IMLM4"},"24":{"head":"tex_ch02_00_075_0_0_IMLM4","chest":"tex_ch02_00_075_0_1_IMLM4","arms":"tex_ch02_00_075_0_2_IMLM4","waist":"tex_ch02_00_075_0_3_IMLM4","legs":"tex_ch02_00_075_0_4_IMLM4"},"26":{"head":"tex_ch02_00_113_0_0_IMLM4","chest":"tex_ch02_00_113_0_1_IMLM4","arms":"tex_ch02_00_113_0_2_IMLM4","waist":"tex_ch02_00_113_0_3_IMLM4","legs":"tex_ch02_00_113_0_4_IMLM4"},"27":{"head":"tex_ch02_00_117_0_0_IMLM4","chest":"tex_ch02_00_117_0_1_IMLM4","arms":"tex_ch02_00_117_0_2_IMLM4","waist":"tex_ch02_00_117_0_3_IMLM4","legs":"tex_ch02_00_117_0_4_IMLM4"},"28":{"head":"tex_ch02_00_028_0_0_IMLM4","chest":"tex_ch02_00_028_0_1_IMLM4","arms":"tex_ch02_00_028_0_2_IMLM4","waist":"tex_ch02_00_028_0_3_IMLM4","legs":"tex_ch02_00_028_0_4_IMLM4"},"29":{"head":"tex_ch02_00_033_0_0_IMLM4","chest":"tex_ch02_00_033_0_1_IMLM4","arms":"tex_ch02_00_033_0_2_IMLM4","waist":"tex_ch02_00_033_0_3_IMLM4","legs":"tex_ch02_00_033_0_4_IMLM4"},"30":{"chest":"tex_ch02_00_013_0_1_IMLM4"},"31":{"head":"tex_ch02_00_128_0_0_IMLM4","chest":"tex_ch02_00_128_0_1_IMLM4","arms":"tex_ch02_00_128_0_2_IMLM4","waist":"tex_ch02_00_128_0_3_IMLM4","legs":"tex_ch02_00_128_0_4_IMLM4"},"34":{"arms":"tex_ch02_00_010_0_2_IMLM4"},"35":{"head":"tex_ch02_00_025_0_0_IMLM4","chest":"tex_ch02_00_025_0_1_IMLM4","arms":"tex_ch02_00_025_0_2_IMLM4","waist":"tex_ch02_00_025_0_3_IMLM4","legs":"tex_ch02_00_025_0_4_IMLM4"},"36":{"head":"tex_ch02_00_117_0_0_IMLM4","chest":"tex_ch02_00_117_0_1_IMLM4","arms":"tex_ch02_00_117_0_2_IMLM4","waist":"tex_ch02_00_117_0_3_IMLM4","legs":"tex_ch02_00_117_0_4_IMLM4"},"37":{"head":"tex_ch02_00_008_0_0_IMLM4","chest":"tex_ch02_00_008_0_1_IMLM4","arms":"tex_ch02_00_008_0_2_IMLM4","waist":"tex_ch02_00_008_0_3_IMLM4","legs":"tex_ch02_00_008_0_4_IMLM4"},"39":{"head":"tex_ch02_00_021_0_0_IMLM4","chest":"tex_ch02_00_021_0_1_IMLM4","arms":"tex_ch02_00_021_0_2_IMLM4","waist":"tex_ch02_00_021_0_3_IMLM4","legs":"tex_ch02_00_021_0_4_IMLM4"},"41":{"head":"tex_ch02_00_132_0_0_IMLM4","chest":"tex_ch02_00_132_0_1_IMLM4","arms":"tex_ch02_00_132_0_2_IMLM4","waist":"tex_ch02_00_132_0_3_IMLM4","legs":"tex_ch02_00_132_0_4_IMLM4"},"42":{"head":"tex_ch02_00_059_0_0_IMLM4","chest":"tex_ch02_00_059_0_1_IMLM4","arms":"tex_ch02_00_059_0_2_IMLM4","waist":"tex_ch02_00_059_0_3_IMLM4","legs":"tex_ch02_00_059_0_4_IMLM4"},"43":{"head":"tex_ch02_00_027_0_0_IMLM4","chest":"tex_ch02_00_027_0_1_IMLM4","arms":"tex_ch02_00_027_0_2_IMLM4","waist":"tex_ch02_00_027_0_3_IMLM4","legs":"tex_ch02_00_027_0_4_IMLM4"},"44":{"waist":"tex_ch02_00_125_0_3_IMLM4"},"45":{"head":"tex_ch02_00_018_0_0_IMLM4","chest":"tex_ch02_00_018_0_1_IMLM4","arms":"tex_ch02_00_018_0_2_IMLM4","waist":"tex_ch02_00_018_0_3_IMLM4","legs":"tex_ch02_00_018_0_4_IMLM4"},"46":{"head":"tex_ch02_00_055_0_0_IMLM4","chest":"tex_ch02_00_055_0_1_IMLM4","arms":"tex_ch02_00_055_0_2_IMLM4","waist":"tex_ch02_00_055_0_3_IMLM4","legs":"tex_ch02_00_055_0_4_IMLM4"},"47":{"head":"tex_ch02_00_019_0_0_IMLM4","chest":"tex_ch02_00_019_0_1_IMLM4","arms":"tex_ch02_00_019_0_2_IMLM4","waist":"tex_ch02_00_019_0_3_IMLM4","legs":"tex_ch02_00_019_0_4_IMLM4"},"48":{"head":"tex_ch02_00_121_0_0_IMLM4","chest":"tex_ch02_00_121_0_1_IMLM4","arms":"tex_ch02_00_121_0_2_IMLM4","waist":"tex_ch02_00_121_0_3_IMLM4","legs":"tex_ch02_00_121_0_4_IMLM4"},"50":{"head":"tex_ch02_00_097_0_0_IMLM4","chest":"tex_ch02_00_097_0_1_IMLM4","arms":"tex_ch02_00_097_0_2_IMLM4","waist":"tex_ch02_00_097_0_3_IMLM4","legs":"tex_ch02_00_097_0_4_IMLM4"},"51":{"head":"tex_ch02_00_138_0_0_IMLM4"},"52":{"waist":"tex_ch02_00_015_0_3_IMLM4"},"54":{"head":"tex_ch02_00_097_0_0_IMLM4","chest":"tex_ch02_00_097_0_1_IMLM4","arms":"tex_ch02_00_097_0_2_IMLM4","waist":"tex_ch02_00_097_0_3_IMLM4","legs":"tex_ch02_00_097_0_4_IMLM4"},"56":{"legs":"tex_ch02_00_134_0_4_IMLM4"},"57":{"head":"tex_ch02_00_113_0_0_IMLM4","chest":"tex_ch02_00_113_0_1_IMLM4","arms":"tex_ch02_00_113_0_2_IMLM4","waist":"tex_ch02_00_113_0_3_IMLM4","legs":"tex_ch02_00_113_0_4_IMLM4"},"68":{"head":"tex_ch02_00_206_0_0_IMLM4"},"70":{"head":"tex_ch02_00_203_0_0_IMLM4","chest":"tex_ch02_00_203_0_1_IMLM4","arms":"tex_ch02_00_203_0_2_IMLM4","waist":"tex_ch02_00_203_0_3_IMLM4","legs":"tex_ch02_00_203_0_4_IMLM4"},"71":{"head":"tex_ch02_00_193_0_0_IMLM4"},"72":{"head":"tex_ch02_00_186_0_0_IMLM4"},"74":{"head":"tex_ch02_00_184_0_0_IMLM4"},"76":{"head":"tex_ch02_00_205_0_0_IMLM4"},"77":{"head":"tex_ch02_00_164_0_0_IMLM4","chest":"tex_ch02_00_164_0_1_IMLM4","arms":"tex_ch02_00_164_0_2_IMLM4","waist":"tex_ch02_00_164_0_3_IMLM4","legs":"tex_ch02_00_164_0_4_IMLM4"},"78":{"head":"tex_ch02_00_173_0_0_IMLM4","chest":"tex_ch02_00_173_0_1_IMLM4","arms":"tex_ch02_00_173_0_2_IMLM4","waist":"tex_ch02_00_173_0_3_IMLM4","legs":"tex_ch02_00_173_0_4_IMLM4"},"79":{"head":"tex_ch02_00_200_0_0_IMLM4"},"80":{"head":"tex_ch02_00_210_0_0_IMLM4"},"81":{"head":"tex_ch02_00_204_0_0_IMLM4","chest":"tex_ch02_00_204_0_1_IMLM4","arms":"tex_ch02_00_204_0_2_IMLM4","waist":"tex_ch02_00_204_0_3_IMLM4","legs":"tex_ch02_00_204_0_4_IMLM4"},"83":{"head":"tex_ch02_00_175_0_0_IMLM4","chest":"tex_ch02_00_175_0_1_IMLM4","arms":"tex_ch02_00_175_0_2_IMLM4","waist":"tex_ch02_00_175_0_3_IMLM4","legs":"tex_ch02_00_175_0_4_IMLM4"},"84":{"head":"tex_ch02_00_162_0_0_IMLM4","chest":"tex_ch02_00_162_0_1_IMLM4","arms":"tex_ch02_00_162_0_2_IMLM4","waist":"tex_ch02_00_162_0_3_IMLM4","legs":"tex_ch02_00_162_0_4_IMLM4"},"86":{"head":"tex_ch02_00_212_0_0_IMLM4"},"87":{"head":"tex_ch02_00_213_0_0_IMLM4"},"88":{"head":"tex_ch02_00_164_0_0_IMLM4","chest":"tex_ch02_00_164_0_1_IMLM4","arms":"tex_ch02_00_164_0_2_IMLM4","waist":"tex_ch02_00_164_0_3_IMLM4","legs":"tex_ch02_00_164_0_4_IMLM4"},"89":{"head":"tex_ch02_00_162_0_0_IMLM4","chest":"tex_ch02_00_162_0_1_IMLM4","arms":"tex_ch02_00_162_0_2_IMLM4","waist":"tex_ch02_00_162_0_3_IMLM4","legs":"tex_ch02_00_162_0_4_IMLM4"},"91":{"head":"tex_ch02_00_028_0_0_IMLM4","chest":"tex_ch02_00_028_0_1_IMLM4","arms":"tex_ch02_00_028_0_2_IMLM4","waist":"tex_ch02_00_028_0_3_IMLM4","legs":"tex_ch02_00_028_0_4_IMLM4"},"92":{"head":"tex_ch02_00_161_0_0_IMLM4"},"93":{"head":"tex_ch02_00_019_0_0_IMLM4","chest":"tex_ch02_00_019_0_1_IMLM4","arms":"tex_ch02_00_019_0_2_IMLM4","waist":"tex_ch02_00_019_0_3_IMLM4","legs":"tex_ch02_00_019_0_4_IMLM4"},"94":{"head":"tex_ch02_00_021_0_0_IMLM4","chest":"tex_ch02_00_021_0_1_IMLM4","arms":"tex_ch02_00_021_0_2_IMLM4","waist":"tex_ch02_00_021_0_3_IMLM4","legs":"tex_ch02_00_021_0_4_IMLM4"},"95":{"head":"tex_ch02_00_032_0_0_IMLM4","chest":"tex_ch02_00_032_0_1_IMLM4","arms":"tex_ch02_00_032_0_2_IMLM4","waist":"tex_ch02_00_032_0_3_IMLM4","legs":"tex_ch02_00_032_0_4_IMLM4"},"96":{"head":"tex_ch02_00_034_0_0_IMLM4","chest":"tex_ch02_00_034_0_1_IMLM4","arms":"tex_ch02_00_034_0_2_IMLM4","waist":"tex_ch02_00_034_0_3_IMLM4","legs":"tex_ch02_00_034_0_4_IMLM4"},"97":{"head":"tex_ch02_00_022_0_0_IMLM4","chest":"tex_ch02_00_022_0_1_IMLM4","arms":"tex_ch02_00_022_0_2_IMLM4","waist":"tex_ch02_00_022_0_3_IMLM4","legs":"tex_ch02_00_022_0_4_IMLM4"},"98":{"legs":"tex_ch02_00_012_0_4_IMLM4"},"99":{"head":"tex_ch02_00_035_0_0_IMLM4","chest":"tex_ch02_00_035_0_1_IMLM4","arms":"tex_ch02_00_035_0_2_IMLM4","waist":"tex_ch02_00_035_0_3_IMLM4","legs":"tex_ch02_00_035_0_4_IMLM4"},"100":{"waist":"tex_ch02_00_015_0_3_IMLM4"},"101":{"head":"tex_ch02_00_017_0_0_IMLM4","chest":"tex_ch02_00_017_0_1_IMLM4","arms":"tex_ch02_00_017_0_2_IMLM4","waist":"tex_ch02_00_017_0_3_IMLM4","legs":"tex_ch02_00_017_0_4_IMLM4"},"102":{"legs":"tex_ch02_00_012_0_4_IMLM4"},"103":{"head":"tex_ch02_00_018_0_0_IMLM4","chest":"tex_ch02_00_018_0_1_IMLM4","arms":"tex_ch02_00_018_0_2_IMLM4","waist":"tex_ch02_00_018_0_3_IMLM4","legs":"tex_ch02_00_018_0_4_IMLM4"},"104":{"head":"tex_ch02_00_136_0_0_IMLM4","chest":"tex_ch02_00_136_0_1_IMLM4","arms":"tex_ch02_00_136_0_2_IMLM4","waist":"tex_ch02_00_136_0_3_IMLM4","legs":"tex_ch02_00_136_0_4_IMLM4"},"105":{"head":"tex_ch02_00_030_0_0_IMLM4","chest":"tex_ch02_00_030_0_1_IMLM4","arms":"tex_ch02_00_030_0_2_IMLM4","waist":"tex_ch02_00_030_0_3_IMLM4","legs":"tex_ch02_00_030_0_4_IMLM4"},"107":{"head":"tex_ch02_00_091_0_0_IMLM4","chest":"tex_ch02_00_091_0_1_IMLM4","arms":"tex_ch02_00_091_0_2_IMLM4","waist":"tex_ch02_00_091_0_3_IMLM4","legs":"tex_ch02_00_091_0_4_IMLM4"},"108":{"head":"tex_ch02_00_055_0_0_IMLM4","chest":"tex_ch02_00_055_0_1_IMLM4","arms":"tex_ch02_00_055_0_2_IMLM4","waist":"tex_ch02_00_055_0_3_IMLM4","legs":"tex_ch02_00_055_0_4_IMLM4"},"109":{"head":"tex_ch02_00_032_0_0_IMLM4","chest":"tex_ch02_00_032_0_1_IMLM4","arms":"tex_ch02_00_032_0_2_IMLM4","waist":"tex_ch02_00_032_0_3_IMLM4","legs":"tex_ch02_00_032_0_4_IMLM4"},"110":{"head":"tex_ch02_00_028_0_0_IMLM4","chest":"tex_ch02_00_028_0_1_IMLM4","arms":"tex_ch02_00_028_0_2_IMLM4","waist":"tex_ch02_00_028_0_3_IMLM4","legs":"tex_ch02_00_028_0_4_IMLM4"},"112":{"head":"tex_ch02_00_130_0_0_IMLM4","chest":"tex_ch02_00_130_0_1_IMLM4","arms":"tex_ch02_00_130_0_2_IMLM4","waist":"tex_ch02_00_130_0_3_IMLM4","legs":"tex_ch02_00_130_0_4_IMLM4"},"113":{"head":"tex_ch02_00_002_0_0_IMLM4","chest":"tex_ch02_00_002_0_1_IMLM4","arms":"tex_ch02_00_002_0_2_IMLM4","waist":"tex_ch02_00_002_0_3_IMLM4","legs":"tex_ch02_00_002_0_4_IMLM4"},"116":{"head":"tex_ch02_00_016_0_0_IMLM4","chest":"tex_ch02_00_016_0_1_IMLM4","arms":"tex_ch02_00_016_0_2_IMLM4","waist":"tex_ch02_00_016_0_3_IMLM4","legs":"tex_ch02_00_016_0_4_IMLM4"},"117":{"head":"tex_ch02_00_011_0_0_IMLM4"},"118":{"head":"tex_ch02_00_127_0_0_IMLM4","chest":"tex_ch02_00_127_0_1_IMLM4","arms":"tex_ch02_00_127_0_2_IMLM4","waist":"tex_ch02_00_127_0_3_IMLM4","legs":"tex_ch02_00_127_0_4_IMLM4"},"119":{"head":"tex_ch02_00_022_0_0_IMLM4","chest":"tex_ch02_00_022_0_1_IMLM4","arms":"tex_ch02_00_022_0_2_IMLM4","waist":"tex_ch02_00_022_0_3_IMLM4","legs":"tex_ch02_00_022_0_4_IMLM4"},"120":{"head":"tex_ch02_00_131_0_0_IMLM4","chest":"tex_ch02_00_131_0_1_IMLM4","arms":"tex_ch02_00_131_0_2_IMLM4","waist":"tex_ch02_00_131_0_3_IMLM4","legs":"tex_ch02_00_131_0_4_IMLM4"},"121":{"head":"tex_ch02_00_129_0_0_IMLM4","chest":"tex_ch02_00_129_0_1_IMLM4","arms":"tex_ch02_00_129_0_2_IMLM4","waist":"tex_ch02_00_129_0_3_IMLM4","legs":"tex_ch02_00_129_0_4_IMLM4"},"122":{"head":"tex_ch02_00_025_0_0_IMLM4","chest":"tex_ch02_00_025_0_1_IMLM4","arms":"tex_ch02_00_025_0_2_IMLM4","waist":"tex_ch02_00_025_0_3_IMLM4","legs":"tex_ch02_00_025_0_4_IMLM4"},"123":{"head":"tex_ch02_00_035_0_0_IMLM4","chest":"tex_ch02_00_035_0_1_IMLM4","arms":"tex_ch02_00_035_0_2_IMLM4","waist":"tex_ch02_00_035_0_3_IMLM4","legs":"tex_ch02_00_035_0_4_IMLM4"},"125":{"head":"tex_ch02_00_023_0_0_IMLM4","chest":"tex_ch02_00_023_0_1_IMLM4","arms":"tex_ch02_00_023_0_2_IMLM4","waist":"tex_ch02_00_023_0_3_IMLM4","legs":"tex_ch02_00_023_0_4_IMLM4"},"126":{"head":"tex_ch02_00_024_0_0_IMLM4","chest":"tex_ch02_00_024_0_1_IMLM4","arms":"tex_ch02_00_024_0_2_IMLM4","waist":"tex_ch02_00_024_0_3_IMLM4","legs":"tex_ch02_00_024_0_4_IMLM4"},"127":{"arms":"tex_ch02_00_010_0_2_IMLM4"},"128":{"head":"tex_ch02_00_030_0_0_IMLM4","chest":"tex_ch02_00_030_0_1_IMLM4","arms":"tex_ch02_00_030_0_2_IMLM4","waist":"tex_ch02_00_030_0_3_IMLM4","legs":"tex_ch02_00_030_0_4_IMLM4"},"131":{"chest":"tex_ch02_00_013_0_1_IMLM4"},"132":{"head":"tex_ch02_00_026_0_0_IMLM4","chest":"tex_ch02_00_026_0_1_IMLM4","arms":"tex_ch02_00_026_0_2_IMLM4","waist":"tex_ch02_00_026_0_3_IMLM4","legs":"tex_ch02_00_026_0_4_IMLM4"},"133":{"head":"tex_ch02_00_083_0_0_IMLM4","chest":"tex_ch02_00_083_0_1_IMLM4","arms":"tex_ch02_00_083_0_2_IMLM4","waist":"tex_ch02_00_083_0_3_IMLM4","legs":"tex_ch02_00_083_0_4_IMLM4"},"134":{"head":"tex_ch02_00_034_0_0_IMLM4","chest":"tex_ch02_00_034_0_1_IMLM4","arms":"tex_ch02_00_034_0_2_IMLM4","waist":"tex_ch02_00_034_0_3_IMLM4","legs":"tex_ch02_00_034_0_4_IMLM4"},"135":{"head":"tex_ch02_00_133_0_0_IMLM4","chest":"tex_ch02_00_133_0_1_IMLM4","arms":"tex_ch02_00_133_0_2_IMLM4","waist":"tex_ch02_00_133_0_3_IMLM4","legs":"tex_ch02_00_133_0_4_IMLM4"},"136":{"head":"tex_ch02_00_121_0_0_IMLM4","chest":"tex_ch02_00_121_0_1_IMLM4","arms":"tex_ch02_00_121_0_2_IMLM4","waist":"tex_ch02_00_121_0_3_IMLM4","legs":"tex_ch02_00_121_0_4_IMLM4"},"138":{"head":"tex_ch02_00_011_0_0_IMLM4"},"139":{"head":"tex_ch02_00_083_0_0_IMLM4","chest":"tex_ch02_00_083_0_1_IMLM4","arms":"tex_ch02_00_083_0_2_IMLM4","waist":"tex_ch02_00_083_0_3_IMLM4","legs":"tex_ch02_00_083_0_4_IMLM4"},"141":{"head":"tex_ch02_00_103_0_0_IMLM4","chest":"tex_ch02_00_103_0_1_IMLM4","arms":"tex_ch02_00_103_0_2_IMLM4","waist":"tex_ch02_00_103_0_3_IMLM4","legs":"tex_ch02_00_103_0_4_IMLM4"},"142":{"head":"tex_ch02_00_027_0_0_IMLM4","chest":"tex_ch02_00_027_0_1_IMLM4","arms":"tex_ch02_00_027_0_2_IMLM4","waist":"tex_ch02_00_027_0_3_IMLM4","legs":"tex_ch02_00_027_0_4_IMLM4"},"143":{"head":"tex_ch02_00_003_0_0_IMLM4","chest":"tex_ch02_00_039_0_1_IMLM4","arms":"tex_ch02_00_003_0_2_IMLM4","waist":"tex_ch02_00_003_0_3_IMLM4","legs":"tex_ch02_00_003_0_4_IMLM4"},"144":{"head":"tex_ch02_00_124_0_0_IMLM4","chest":"tex_ch02_00_124_0_1_IMLM4","legs":"tex_ch02_00_124_0_4_IMLM4"},"145":{"head":"tex_ch02_00_111_0_0_IMLM4","chest":"tex_ch02_00_111_0_1_IMLM4","arms":"tex_ch02_00_111_0_2_IMLM4","waist":"tex_ch02_00_111_0_3_IMLM4","legs":"tex_ch02_00_111_0_4_IMLM4"},"146":{"head":"tex_ch02_00_026_0_0_IMLM4","chest":"tex_ch02_00_026_0_1_IMLM4","arms":"tex_ch02_00_026_0_2_IMLM4","waist":"tex_ch02_00_026_0_3_IMLM4","legs":"tex_ch02_00_026_0_4_IMLM4"},"147":{"head":"tex_ch02_00_107_0_0_IMLM4","chest":"tex_ch02_00_107_0_1_IMLM4","arms":"tex_ch02_00_107_0_2_IMLM4","waist":"tex_ch02_00_107_0_3_IMLM4","legs":"tex_ch02_00_107_0_4_IMLM4"},"148":{"head":"tex_ch02_00_004_0_0_IMLM4","chest":"tex_ch02_00_041_0_1_IMLM4","arms":"tex_ch02_00_004_0_2_IMLM4","waist":"tex_ch02_00_004_0_3_IMLM4","legs":"tex_ch02_00_004_0_4_IMLM4"},"150":{"head":"tex_ch02_00_014_0_0_IMLM4"},"151":{"head":"tex_ch02_00_140_0_0_IMLM4"},"152":{"head":"tex_ch02_00_023_0_0_IMLM4","chest":"tex_ch02_00_023_0_1_IMLM4","arms":"tex_ch02_00_023_0_2_IMLM4","waist":"tex_ch02_00_023_0_3_IMLM4","legs":"tex_ch02_00_023_0_4_IMLM4"},"164":{"head":"tex_ch02_00_117_0_0_IMLM4","chest":"tex_ch02_00_117_0_1_IMLM4","arms":"tex_ch02_00_117_0_2_IMLM4","waist":"tex_ch02_00_117_0_3_IMLM4","legs":"tex_ch02_00_117_0_4_IMLM4"},"174":{"head":"tex_ch02_00_030_0_0_IMLM4","chest":"tex_ch02_00_030_0_1_IMLM4","arms":"tex_ch02_00_030_0_2_IMLM4","waist":"tex_ch02_00_030_0_3_IMLM4","legs":"tex_ch02_00_030_0_4_IMLM4"},"185":{"head":"tex_ch02_00_113_0_0_IMLM4","chest":"tex_ch02_00_113_0_1_IMLM4","arms":"tex_ch02_00_113_0_2_IMLM4","waist":"tex_ch02_00_113_0_3_IMLM4","legs":"tex_ch02_00_113_0_4_IMLM4"},"193":{"head":"tex_ch02_00_121_0_0_IMLM4","chest":"tex_ch02_00_121_0_1_IMLM4","arms":"tex_ch02_00_121_0_2_IMLM4","waist":"tex_ch02_00_121_0_3_IMLM4","legs":"tex_ch02_00_121_0_4_IMLM4"}};
+const ARMOR_IMG = {"1":{"head":"tex_ch02_00_020_0_0_IMLM4","chest":"tex_ch02_00_020_0_1_IMLM4","arms":"tex_ch02_00_020_0_2_IMLM4","waist":"tex_ch02_00_020_0_3_IMLM4","legs":"tex_ch02_00_020_0_4_IMLM4"},"2":{"head":"tex_ch02_00_066_0_0_IMLM4","chest":"tex_ch02_00_066_0_1_IMLM4","arms":"tex_ch02_00_066_0_2_IMLM4","waist":"tex_ch02_00_066_0_3_IMLM4","legs":"tex_ch02_00_066_0_4_IMLM4"},"3":{"head":"tex_ch02_00_107_0_0_IMLM4","chest":"tex_ch02_00_107_0_1_IMLM4","arms":"tex_ch02_00_107_0_2_IMLM4","waist":"tex_ch02_00_107_0_3_IMLM4","legs":"tex_ch02_00_107_0_4_IMLM4"},"4":{"head":"tex_ch02_00_091_0_0_IMLM4","chest":"tex_ch02_00_091_0_1_IMLM4","arms":"tex_ch02_00_091_0_2_IMLM4","waist":"tex_ch02_00_091_0_3_IMLM4","legs":"tex_ch02_00_091_0_4_IMLM4"},"5":{"head":"tex_ch02_00_135_0_0_IMLM4","chest":"tex_ch02_00_135_0_1_IMLM4","arms":"tex_ch02_00_135_0_2_IMLM4","waist":"tex_ch02_00_135_0_3_IMLM4","legs":"tex_ch02_00_135_0_4_IMLM4"},"6":{"head":"tex_ch02_00_016_0_0_IMLM4","chest":"tex_ch02_00_016_0_1_IMLM4","arms":"tex_ch02_00_016_0_2_IMLM4","waist":"tex_ch02_00_016_0_3_IMLM4","legs":"tex_ch02_00_016_0_4_IMLM4"},"7":{"head":"tex_ch02_00_082_0_0_IMLM4","chest":"tex_ch02_00_082_0_1_IMLM4","arms":"tex_ch02_00_082_0_2_IMLM4","waist":"tex_ch02_00_082_0_3_IMLM4","legs":"tex_ch02_00_082_0_4_IMLM4"},"8":{"head":"tex_ch02_00_007_0_0_IMLM4","chest":"tex_ch02_00_007_0_1_IMLM4","arms":"tex_ch02_00_007_0_2_IMLM4","waist":"tex_ch02_00_007_0_3_IMLM4","legs":"tex_ch02_00_007_0_4_IMLM4"},"9":{"head":"tex_ch02_00_103_0_0_IMLM4","chest":"tex_ch02_00_103_0_1_IMLM4","arms":"tex_ch02_00_103_0_2_IMLM4","waist":"tex_ch02_00_103_0_3_IMLM4","legs":"tex_ch02_00_103_0_4_IMLM4"},"10":{"head":"tex_ch02_00_017_0_0_IMLM4","chest":"tex_ch02_00_017_0_1_IMLM4","arms":"tex_ch02_00_017_0_2_IMLM4","waist":"tex_ch02_00_017_0_3_IMLM4","legs":"tex_ch02_00_017_0_4_IMLM4"},"11":{"head":"tex_ch02_00_005_0_0_IMLM4","chest":"tex_ch02_00_005_0_1_IMLM4","arms":"tex_ch02_00_005_0_2_IMLM4","waist":"tex_ch02_00_005_0_3_IMLM4","legs":"tex_ch02_00_005_0_4_IMLM4"},"12":{"head":"tex_ch02_00_050_0_0_IMLM4","chest":"tex_ch02_00_050_0_1_IMLM4","arms":"tex_ch02_00_050_0_2_IMLM4","waist":"tex_ch02_00_050_0_3_IMLM4","legs":"tex_ch02_00_050_0_4_IMLM4"},"13":{"head":"tex_ch02_00_080_0_0_IMLM4","chest":"tex_ch02_00_080_0_1_IMLM4","arms":"tex_ch02_00_080_0_2_IMLM4","waist":"tex_ch02_00_080_0_3_IMLM4","legs":"tex_ch02_00_080_0_4_IMLM4"},"14":{"head":"tex_ch02_00_033_0_0_IMLM4","chest":"tex_ch02_00_033_0_1_IMLM4","arms":"tex_ch02_00_033_0_2_IMLM4","waist":"tex_ch02_00_033_0_3_IMLM4","legs":"tex_ch02_00_033_0_4_IMLM4"},"15":{"head":"tex_ch02_00_123_0_0_IMLM4","chest":"tex_ch02_00_123_0_1_IMLM4","waist":"tex_ch02_00_123_0_3_IMLM4","legs":"tex_ch02_00_123_0_4_IMLM4"},"16":{"head":"tex_ch02_00_075_0_0_IMLM4","chest":"tex_ch02_00_075_0_1_IMLM4","arms":"tex_ch02_00_075_0_2_IMLM4","waist":"tex_ch02_00_075_0_3_IMLM4","legs":"tex_ch02_00_075_0_4_IMLM4"},"17":{"head":"tex_ch02_00_014_0_0_IMLM4"},"18":{"waist":"tex_ch02_00_088_0_3_IMLM4"},"19":{"head":"tex_ch02_00_024_0_0_IMLM4","chest":"tex_ch02_00_024_0_1_IMLM4","arms":"tex_ch02_00_024_0_2_IMLM4","waist":"tex_ch02_00_024_0_3_IMLM4","legs":"tex_ch02_00_024_0_4_IMLM4"},"20":{"head":"tex_ch02_00_126_0_0_IMLM4","chest":"tex_ch02_00_126_0_1_IMLM4"},"21":{"head":"tex_ch02_00_020_0_0_IMLM4","chest":"tex_ch02_00_020_0_1_IMLM4","arms":"tex_ch02_00_020_0_2_IMLM4","waist":"tex_ch02_00_020_0_3_IMLM4","legs":"tex_ch02_00_020_0_4_IMLM4"},"22":{"head":"tex_ch02_00_109_0_0_IMLM4","chest":"tex_ch02_00_109_0_1_IMLM4","arms":"tex_ch02_00_109_0_2_IMLM4","waist":"tex_ch02_00_109_0_3_IMLM4","legs":"tex_ch02_00_109_0_4_IMLM4"},"23":{"head":"tex_ch02_00_059_0_0_IMLM4","chest":"tex_ch02_00_059_0_1_IMLM4","arms":"tex_ch02_00_059_0_2_IMLM4","waist":"tex_ch02_00_059_0_3_IMLM4","legs":"tex_ch02_00_059_0_4_IMLM4"},"24":{"head":"tex_ch02_00_075_0_0_IMLM4","chest":"tex_ch02_00_075_0_1_IMLM4","arms":"tex_ch02_00_075_0_2_IMLM4","waist":"tex_ch02_00_075_0_3_IMLM4","legs":"tex_ch02_00_075_0_4_IMLM4"},"25":{"head":"tex_ch02_00_036_0_0_IMLM4","chest":"tex_ch02_00_036_0_1_IMLM4","arms":"tex_ch02_00_036_0_2_IMLM4","waist":"tex_ch02_00_036_0_3_IMLM4","legs":"tex_ch02_00_036_0_4_IMLM4"},"26":{"head":"tex_ch02_00_113_0_0_IMLM4","chest":"tex_ch02_00_113_0_1_IMLM4","arms":"tex_ch02_00_113_0_2_IMLM4","waist":"tex_ch02_00_113_0_3_IMLM4","legs":"tex_ch02_00_113_0_4_IMLM4"},"27":{"head":"tex_ch02_00_117_0_0_IMLM4","chest":"tex_ch02_00_117_0_1_IMLM4","arms":"tex_ch02_00_117_0_2_IMLM4","waist":"tex_ch02_00_117_0_3_IMLM4","legs":"tex_ch02_00_117_0_4_IMLM4"},"28":{"head":"tex_ch02_00_028_0_0_IMLM4","chest":"tex_ch02_00_028_0_1_IMLM4","arms":"tex_ch02_00_028_0_2_IMLM4","waist":"tex_ch02_00_028_0_3_IMLM4","legs":"tex_ch02_00_028_0_4_IMLM4"},"29":{"head":"tex_ch02_00_033_0_0_IMLM4","chest":"tex_ch02_00_033_0_1_IMLM4","arms":"tex_ch02_00_033_0_2_IMLM4","waist":"tex_ch02_00_033_0_3_IMLM4","legs":"tex_ch02_00_033_0_4_IMLM4"},"30":{"chest":"tex_ch02_00_013_0_1_IMLM4"},"31":{"head":"tex_ch02_00_128_0_0_IMLM4","chest":"tex_ch02_00_128_0_1_IMLM4","arms":"tex_ch02_00_128_0_2_IMLM4","waist":"tex_ch02_00_128_0_3_IMLM4","legs":"tex_ch02_00_128_0_4_IMLM4"},"32":{"chest":"tex_ch02_00_052_0_1_IMLM4"},"33":{"head":"tex_ch02_00_094_0_0_IMLM4","chest":"tex_ch02_00_094_0_1_IMLM4","arms":"tex_ch02_00_094_0_2_IMLM4","waist":"tex_ch02_00_094_0_3_IMLM4","legs":"tex_ch02_00_094_0_4_IMLM4"},"34":{"arms":"tex_ch02_00_010_0_2_IMLM4"},"35":{"head":"tex_ch02_00_025_0_0_IMLM4","chest":"tex_ch02_00_025_0_1_IMLM4","arms":"tex_ch02_00_025_0_2_IMLM4","waist":"tex_ch02_00_025_0_3_IMLM4","legs":"tex_ch02_00_025_0_4_IMLM4"},"36":{"head":"tex_ch02_00_117_0_0_IMLM4","chest":"tex_ch02_00_117_0_1_IMLM4","arms":"tex_ch02_00_117_0_2_IMLM4","waist":"tex_ch02_00_117_0_3_IMLM4","legs":"tex_ch02_00_117_0_4_IMLM4"},"37":{"head":"tex_ch02_00_008_0_0_IMLM4","chest":"tex_ch02_00_008_0_1_IMLM4","arms":"tex_ch02_00_008_0_2_IMLM4","waist":"tex_ch02_00_008_0_3_IMLM4","legs":"tex_ch02_00_008_0_4_IMLM4"},"38":{"head":"tex_ch02_00_194_0_0_IMLM4","chest":"tex_ch02_00_194_0_1_IMLM4","arms":"tex_ch02_00_194_0_2_IMLM4","waist":"tex_ch02_00_194_0_3_IMLM4","legs":"tex_ch02_00_194_0_4_IMLM4"},"39":{"head":"tex_ch02_00_021_0_0_IMLM4","chest":"tex_ch02_00_021_0_1_IMLM4","arms":"tex_ch02_00_021_0_2_IMLM4","waist":"tex_ch02_00_021_0_3_IMLM4","legs":"tex_ch02_00_021_0_4_IMLM4"},"40":{"legs":"tex_ch02_00_139_0_4_IMLM4"},"41":{"head":"tex_ch02_00_132_0_0_IMLM4","chest":"tex_ch02_00_132_0_1_IMLM4","arms":"tex_ch02_00_132_0_2_IMLM4","waist":"tex_ch02_00_132_0_3_IMLM4","legs":"tex_ch02_00_132_0_4_IMLM4"},"42":{"head":"tex_ch02_00_059_0_0_IMLM4","chest":"tex_ch02_00_059_0_1_IMLM4","arms":"tex_ch02_00_059_0_2_IMLM4","waist":"tex_ch02_00_059_0_3_IMLM4","legs":"tex_ch02_00_059_0_4_IMLM4"},"43":{"head":"tex_ch02_00_027_0_0_IMLM4","chest":"tex_ch02_00_027_0_1_IMLM4","arms":"tex_ch02_00_027_0_2_IMLM4","waist":"tex_ch02_00_027_0_3_IMLM4","legs":"tex_ch02_00_027_0_4_IMLM4"},"44":{"waist":"tex_ch02_00_125_0_3_IMLM4"},"45":{"head":"tex_ch02_00_018_0_0_IMLM4","chest":"tex_ch02_00_018_0_1_IMLM4","arms":"tex_ch02_00_018_0_2_IMLM4","waist":"tex_ch02_00_018_0_3_IMLM4","legs":"tex_ch02_00_018_0_4_IMLM4"},"46":{"head":"tex_ch02_00_055_0_0_IMLM4","chest":"tex_ch02_00_055_0_1_IMLM4","arms":"tex_ch02_00_055_0_2_IMLM4","waist":"tex_ch02_00_055_0_3_IMLM4","legs":"tex_ch02_00_055_0_4_IMLM4"},"47":{"head":"tex_ch02_00_019_0_0_IMLM4","chest":"tex_ch02_00_019_0_1_IMLM4","arms":"tex_ch02_00_019_0_2_IMLM4","waist":"tex_ch02_00_019_0_3_IMLM4","legs":"tex_ch02_00_019_0_4_IMLM4"},"48":{"head":"tex_ch02_00_121_0_0_IMLM4","chest":"tex_ch02_00_121_0_1_IMLM4","arms":"tex_ch02_00_121_0_2_IMLM4","waist":"tex_ch02_00_121_0_3_IMLM4","legs":"tex_ch02_00_121_0_4_IMLM4"},"49":{"head":"tex_ch02_00_106_0_0_IMLM4","chest":"tex_ch02_00_106_0_1_IMLM4","arms":"tex_ch02_00_106_0_2_IMLM4","waist":"tex_ch02_00_106_0_3_IMLM4","legs":"tex_ch02_00_106_0_4_IMLM4"},"50":{"head":"tex_ch02_00_097_0_0_IMLM4","chest":"tex_ch02_00_097_0_1_IMLM4","arms":"tex_ch02_00_097_0_2_IMLM4","waist":"tex_ch02_00_097_0_3_IMLM4","legs":"tex_ch02_00_097_0_4_IMLM4"},"51":{"head":"tex_ch02_00_138_0_0_IMLM4"},"52":{"waist":"tex_ch02_00_015_0_3_IMLM4"},"53":{"head":"tex_ch02_00_096_0_0_IMLM4","chest":"tex_ch02_00_096_0_1_IMLM4","arms":"tex_ch02_00_096_0_2_IMLM4","waist":"tex_ch02_00_096_0_3_IMLM4","legs":"tex_ch02_00_096_0_4_IMLM4"},"54":{"head":"tex_ch02_00_097_0_0_IMLM4","chest":"tex_ch02_00_097_0_1_IMLM4","arms":"tex_ch02_00_097_0_2_IMLM4","waist":"tex_ch02_00_097_0_3_IMLM4","legs":"tex_ch02_00_097_0_4_IMLM4"},"55":{"head":"tex_ch02_00_118_0_0_IMLM4","chest":"tex_ch02_00_118_0_1_IMLM4","arms":"tex_ch02_00_118_0_2_IMLM4","waist":"tex_ch02_00_118_0_3_IMLM4","legs":"tex_ch02_00_118_0_4_IMLM4"},"56":{"legs":"tex_ch02_00_134_0_4_IMLM4"},"57":{"head":"tex_ch02_00_113_0_0_IMLM4","chest":"tex_ch02_00_113_0_1_IMLM4","arms":"tex_ch02_00_113_0_2_IMLM4","waist":"tex_ch02_00_113_0_3_IMLM4","legs":"tex_ch02_00_113_0_4_IMLM4"},"58":{"head":"tex_ch02_00_068_0_0_IMLM4","chest":"tex_ch02_00_068_0_1_IMLM4","arms":"tex_ch02_00_068_0_2_IMLM4","waist":"tex_ch02_00_068_0_3_IMLM4","legs":"tex_ch02_00_068_0_4_IMLM4"},"59":{"head":"tex_ch02_00_037_0_0_IMLM4","chest":"tex_ch02_00_037_0_1_IMLM4","arms":"tex_ch02_00_037_0_2_IMLM4","waist":"tex_ch02_00_037_0_3_IMLM4","legs":"tex_ch02_00_037_0_4_IMLM4"},"60":{"head":"tex_ch02_00_039_0_0_IMLM4","chest":"tex_ch02_00_003_0_1_IMLM4","arms":"tex_ch02_00_039_0_2_IMLM4","waist":"tex_ch02_00_039_0_3_IMLM4","legs":"tex_ch02_00_039_0_4_IMLM4"},"61":{"head":"tex_ch02_00_041_0_0_IMLM4","chest":"tex_ch02_00_004_0_1_IMLM4","arms":"tex_ch02_00_041_0_2_IMLM4","waist":"tex_ch02_00_041_0_3_IMLM4","legs":"tex_ch02_00_041_0_4_IMLM4"},"62":{"head":"tex_ch02_00_061_0_0_IMLM4","chest":"tex_ch02_00_061_0_1_IMLM4","arms":"tex_ch02_00_061_0_2_IMLM4","waist":"tex_ch02_00_061_0_3_IMLM4","legs":"tex_ch02_00_061_0_4_IMLM4"},"63":{"head":"tex_ch02_00_063_0_0_IMLM4","chest":"tex_ch02_00_063_0_1_IMLM4","arms":"tex_ch02_00_063_0_2_IMLM4","waist":"tex_ch02_00_063_0_3_IMLM4","legs":"tex_ch02_00_063_0_4_IMLM4"},"64":{"head":"tex_ch02_00_085_0_0_IMLM4","chest":"tex_ch02_00_085_0_1_IMLM4","arms":"tex_ch02_00_085_0_2_IMLM4","waist":"tex_ch02_00_085_0_3_IMLM4","legs":"tex_ch02_00_085_0_4_IMLM4"},"65":{"arms":"tex_ch02_00_046_0_2_IMLM4"},"66":{"head":"tex_ch02_00_044_0_0_IMLM4"},"68":{"head":"tex_ch02_00_206_0_0_IMLM4"},"70":{"head":"tex_ch02_00_203_0_0_IMLM4","chest":"tex_ch02_00_203_0_1_IMLM4","arms":"tex_ch02_00_203_0_2_IMLM4","waist":"tex_ch02_00_203_0_3_IMLM4","legs":"tex_ch02_00_203_0_4_IMLM4"},"71":{"head":"tex_ch02_00_193_0_0_IMLM4"},"72":{"head":"tex_ch02_00_186_0_0_IMLM4"},"74":{"head":"tex_ch02_00_184_0_0_IMLM4"},"76":{"head":"tex_ch02_00_205_0_0_IMLM4"},"77":{"head":"tex_ch02_00_164_0_0_IMLM4","chest":"tex_ch02_00_164_0_1_IMLM4","arms":"tex_ch02_00_164_0_2_IMLM4","waist":"tex_ch02_00_164_0_3_IMLM4","legs":"tex_ch02_00_164_0_4_IMLM4"},"78":{"head":"tex_ch02_00_173_0_0_IMLM4","chest":"tex_ch02_00_173_0_1_IMLM4","arms":"tex_ch02_00_173_0_2_IMLM4","waist":"tex_ch02_00_173_0_3_IMLM4","legs":"tex_ch02_00_173_0_4_IMLM4"},"79":{"head":"tex_ch02_00_200_0_0_IMLM4"},"80":{"head":"tex_ch02_00_210_0_0_IMLM4"},"81":{"head":"tex_ch02_00_204_0_0_IMLM4","chest":"tex_ch02_00_204_0_1_IMLM4","arms":"tex_ch02_00_204_0_2_IMLM4","waist":"tex_ch02_00_204_0_3_IMLM4","legs":"tex_ch02_00_204_0_4_IMLM4"},"83":{"head":"tex_ch02_00_175_0_0_IMLM4","chest":"tex_ch02_00_175_0_1_IMLM4","arms":"tex_ch02_00_175_0_2_IMLM4","waist":"tex_ch02_00_175_0_3_IMLM4","legs":"tex_ch02_00_175_0_4_IMLM4"},"84":{"head":"tex_ch02_00_162_0_0_IMLM4","chest":"tex_ch02_00_162_0_1_IMLM4","arms":"tex_ch02_00_162_0_2_IMLM4","waist":"tex_ch02_00_162_0_3_IMLM4","legs":"tex_ch02_00_162_0_4_IMLM4"},"86":{"head":"tex_ch02_00_212_0_0_IMLM4"},"87":{"head":"tex_ch02_00_213_0_0_IMLM4"},"88":{"head":"tex_ch02_00_164_0_0_IMLM4","chest":"tex_ch02_00_164_0_1_IMLM4","arms":"tex_ch02_00_164_0_2_IMLM4","waist":"tex_ch02_00_164_0_3_IMLM4","legs":"tex_ch02_00_164_0_4_IMLM4"},"89":{"head":"tex_ch02_00_162_0_0_IMLM4","chest":"tex_ch02_00_162_0_1_IMLM4","arms":"tex_ch02_00_162_0_2_IMLM4","waist":"tex_ch02_00_162_0_3_IMLM4","legs":"tex_ch02_00_162_0_4_IMLM4"},"91":{"head":"tex_ch02_00_028_0_0_IMLM4","chest":"tex_ch02_00_028_0_1_IMLM4","arms":"tex_ch02_00_028_0_2_IMLM4","waist":"tex_ch02_00_028_0_3_IMLM4","legs":"tex_ch02_00_028_0_4_IMLM4"},"92":{"head":"tex_ch02_00_161_0_0_IMLM4"},"93":{"head":"tex_ch02_00_019_0_0_IMLM4","chest":"tex_ch02_00_019_0_1_IMLM4","arms":"tex_ch02_00_019_0_2_IMLM4","waist":"tex_ch02_00_019_0_3_IMLM4","legs":"tex_ch02_00_019_0_4_IMLM4"},"94":{"head":"tex_ch02_00_021_0_0_IMLM4","chest":"tex_ch02_00_021_0_1_IMLM4","arms":"tex_ch02_00_021_0_2_IMLM4","waist":"tex_ch02_00_021_0_3_IMLM4","legs":"tex_ch02_00_021_0_4_IMLM4"},"95":{"head":"tex_ch02_00_032_0_0_IMLM4","chest":"tex_ch02_00_032_0_1_IMLM4","arms":"tex_ch02_00_032_0_2_IMLM4","waist":"tex_ch02_00_032_0_3_IMLM4","legs":"tex_ch02_00_032_0_4_IMLM4"},"96":{"head":"tex_ch02_00_034_0_0_IMLM4","chest":"tex_ch02_00_034_0_1_IMLM4","arms":"tex_ch02_00_034_0_2_IMLM4","waist":"tex_ch02_00_034_0_3_IMLM4","legs":"tex_ch02_00_034_0_4_IMLM4"},"97":{"head":"tex_ch02_00_022_0_0_IMLM4","chest":"tex_ch02_00_022_0_1_IMLM4","arms":"tex_ch02_00_022_0_2_IMLM4","waist":"tex_ch02_00_022_0_3_IMLM4","legs":"tex_ch02_00_022_0_4_IMLM4"},"98":{"legs":"tex_ch02_00_012_0_4_IMLM4"},"99":{"head":"tex_ch02_00_035_0_0_IMLM4","chest":"tex_ch02_00_035_0_1_IMLM4","arms":"tex_ch02_00_035_0_2_IMLM4","waist":"tex_ch02_00_035_0_3_IMLM4","legs":"tex_ch02_00_035_0_4_IMLM4"},"100":{"waist":"tex_ch02_00_015_0_3_IMLM4"},"101":{"head":"tex_ch02_00_017_0_0_IMLM4","chest":"tex_ch02_00_017_0_1_IMLM4","arms":"tex_ch02_00_017_0_2_IMLM4","waist":"tex_ch02_00_017_0_3_IMLM4","legs":"tex_ch02_00_017_0_4_IMLM4"},"102":{"legs":"tex_ch02_00_012_0_4_IMLM4"},"103":{"head":"tex_ch02_00_018_0_0_IMLM4","chest":"tex_ch02_00_018_0_1_IMLM4","arms":"tex_ch02_00_018_0_2_IMLM4","waist":"tex_ch02_00_018_0_3_IMLM4","legs":"tex_ch02_00_018_0_4_IMLM4"},"104":{"head":"tex_ch02_00_136_0_0_IMLM4","chest":"tex_ch02_00_136_0_1_IMLM4","arms":"tex_ch02_00_136_0_2_IMLM4","waist":"tex_ch02_00_136_0_3_IMLM4","legs":"tex_ch02_00_136_0_4_IMLM4"},"105":{"head":"tex_ch02_00_030_0_0_IMLM4","chest":"tex_ch02_00_030_0_1_IMLM4","arms":"tex_ch02_00_030_0_2_IMLM4","waist":"tex_ch02_00_030_0_3_IMLM4","legs":"tex_ch02_00_030_0_4_IMLM4"},"106":{"head":"tex_ch02_00_054_0_0_IMLM4"},"107":{"head":"tex_ch02_00_091_0_0_IMLM4","chest":"tex_ch02_00_091_0_1_IMLM4","arms":"tex_ch02_00_091_0_2_IMLM4","waist":"tex_ch02_00_091_0_3_IMLM4","legs":"tex_ch02_00_091_0_4_IMLM4"},"108":{"head":"tex_ch02_00_055_0_0_IMLM4","chest":"tex_ch02_00_055_0_1_IMLM4","arms":"tex_ch02_00_055_0_2_IMLM4","waist":"tex_ch02_00_055_0_3_IMLM4","legs":"tex_ch02_00_055_0_4_IMLM4"},"109":{"head":"tex_ch02_00_032_0_0_IMLM4","chest":"tex_ch02_00_032_0_1_IMLM4","arms":"tex_ch02_00_032_0_2_IMLM4","waist":"tex_ch02_00_032_0_3_IMLM4","legs":"tex_ch02_00_032_0_4_IMLM4"},"110":{"head":"tex_ch02_00_028_0_0_IMLM4","chest":"tex_ch02_00_028_0_1_IMLM4","arms":"tex_ch02_00_028_0_2_IMLM4","waist":"tex_ch02_00_028_0_3_IMLM4","legs":"tex_ch02_00_028_0_4_IMLM4"},"111":{"head":"tex_ch02_00_100_0_0_IMLM4","chest":"tex_ch02_00_100_0_1_IMLM4","arms":"tex_ch02_00_100_0_2_IMLM4","waist":"tex_ch02_00_100_0_3_IMLM4","legs":"tex_ch02_00_100_0_4_IMLM4"},"112":{"head":"tex_ch02_00_130_0_0_IMLM4","chest":"tex_ch02_00_130_0_1_IMLM4","arms":"tex_ch02_00_130_0_2_IMLM4","waist":"tex_ch02_00_130_0_3_IMLM4","legs":"tex_ch02_00_130_0_4_IMLM4"},"113":{"head":"tex_ch02_00_002_0_0_IMLM4","chest":"tex_ch02_00_002_0_1_IMLM4","arms":"tex_ch02_00_002_0_2_IMLM4","waist":"tex_ch02_00_002_0_3_IMLM4","legs":"tex_ch02_00_002_0_4_IMLM4"},"114":{"head":"tex_ch02_00_072_0_0_IMLM4","chest":"tex_ch02_00_072_0_1_IMLM4","arms":"tex_ch02_00_072_0_2_IMLM4","waist":"tex_ch02_00_072_0_3_IMLM4","legs":"tex_ch02_00_072_0_4_IMLM4"},"115":{"head":"tex_ch02_00_078_0_0_IMLM4","chest":"tex_ch02_00_078_0_1_IMLM4","arms":"tex_ch02_00_078_0_2_IMLM4","waist":"tex_ch02_00_078_0_3_IMLM4","legs":"tex_ch02_00_078_0_4_IMLM4"},"116":{"head":"tex_ch02_00_016_0_0_IMLM4","chest":"tex_ch02_00_016_0_1_IMLM4","arms":"tex_ch02_00_016_0_2_IMLM4","waist":"tex_ch02_00_016_0_3_IMLM4","legs":"tex_ch02_00_016_0_4_IMLM4"},"117":{"head":"tex_ch02_00_011_0_0_IMLM4"},"118":{"head":"tex_ch02_00_127_0_0_IMLM4","chest":"tex_ch02_00_127_0_1_IMLM4","arms":"tex_ch02_00_127_0_2_IMLM4","waist":"tex_ch02_00_127_0_3_IMLM4","legs":"tex_ch02_00_127_0_4_IMLM4"},"119":{"head":"tex_ch02_00_022_0_0_IMLM4","chest":"tex_ch02_00_022_0_1_IMLM4","arms":"tex_ch02_00_022_0_2_IMLM4","waist":"tex_ch02_00_022_0_3_IMLM4","legs":"tex_ch02_00_022_0_4_IMLM4"},"120":{"head":"tex_ch02_00_131_0_0_IMLM4","chest":"tex_ch02_00_131_0_1_IMLM4","arms":"tex_ch02_00_131_0_2_IMLM4","waist":"tex_ch02_00_131_0_3_IMLM4","legs":"tex_ch02_00_131_0_4_IMLM4"},"121":{"head":"tex_ch02_00_129_0_0_IMLM4","chest":"tex_ch02_00_129_0_1_IMLM4","arms":"tex_ch02_00_129_0_2_IMLM4","waist":"tex_ch02_00_129_0_3_IMLM4","legs":"tex_ch02_00_129_0_4_IMLM4"},"122":{"head":"tex_ch02_00_025_0_0_IMLM4","chest":"tex_ch02_00_025_0_1_IMLM4","arms":"tex_ch02_00_025_0_2_IMLM4","waist":"tex_ch02_00_025_0_3_IMLM4","legs":"tex_ch02_00_025_0_4_IMLM4"},"123":{"head":"tex_ch02_00_035_0_0_IMLM4","chest":"tex_ch02_00_035_0_1_IMLM4","arms":"tex_ch02_00_035_0_2_IMLM4","waist":"tex_ch02_00_035_0_3_IMLM4","legs":"tex_ch02_00_035_0_4_IMLM4"},"124":{"head":"tex_ch02_00_120_0_0_IMLM4","chest":"tex_ch02_00_120_0_1_IMLM4","arms":"tex_ch02_00_120_0_2_IMLM4","waist":"tex_ch02_00_120_0_3_IMLM4","legs":"tex_ch02_00_120_0_4_IMLM4"},"125":{"head":"tex_ch02_00_023_0_0_IMLM4","chest":"tex_ch02_00_023_0_1_IMLM4","arms":"tex_ch02_00_023_0_2_IMLM4","waist":"tex_ch02_00_023_0_3_IMLM4","legs":"tex_ch02_00_023_0_4_IMLM4"},"126":{"head":"tex_ch02_00_024_0_0_IMLM4","chest":"tex_ch02_00_024_0_1_IMLM4","arms":"tex_ch02_00_024_0_2_IMLM4","waist":"tex_ch02_00_024_0_3_IMLM4","legs":"tex_ch02_00_024_0_4_IMLM4"},"127":{"arms":"tex_ch02_00_010_0_2_IMLM4"},"128":{"head":"tex_ch02_00_030_0_0_IMLM4","chest":"tex_ch02_00_030_0_1_IMLM4","arms":"tex_ch02_00_030_0_2_IMLM4","waist":"tex_ch02_00_030_0_3_IMLM4","legs":"tex_ch02_00_030_0_4_IMLM4"},"129":{"head":"tex_ch02_00_058_0_0_IMLM4","chest":"tex_ch02_00_058_0_1_IMLM4","arms":"tex_ch02_00_058_0_2_IMLM4","waist":"tex_ch02_00_058_0_3_IMLM4","legs":"tex_ch02_00_058_0_4_IMLM4"},"130":{"head":"tex_ch02_00_090_0_0_IMLM4","chest":"tex_ch02_00_090_0_1_IMLM4","arms":"tex_ch02_00_090_0_2_IMLM4","waist":"tex_ch02_00_090_0_3_IMLM4","legs":"tex_ch02_00_090_0_4_IMLM4"},"131":{"chest":"tex_ch02_00_013_0_1_IMLM4"},"132":{"head":"tex_ch02_00_026_0_0_IMLM4","chest":"tex_ch02_00_026_0_1_IMLM4","arms":"tex_ch02_00_026_0_2_IMLM4","waist":"tex_ch02_00_026_0_3_IMLM4","legs":"tex_ch02_00_026_0_4_IMLM4"},"133":{"head":"tex_ch02_00_083_0_0_IMLM4","chest":"tex_ch02_00_083_0_1_IMLM4","arms":"tex_ch02_00_083_0_2_IMLM4","waist":"tex_ch02_00_083_0_3_IMLM4","legs":"tex_ch02_00_083_0_4_IMLM4"},"134":{"head":"tex_ch02_00_034_0_0_IMLM4","chest":"tex_ch02_00_034_0_1_IMLM4","arms":"tex_ch02_00_034_0_2_IMLM4","waist":"tex_ch02_00_034_0_3_IMLM4","legs":"tex_ch02_00_034_0_4_IMLM4"},"135":{"head":"tex_ch02_00_133_0_0_IMLM4","chest":"tex_ch02_00_133_0_1_IMLM4","arms":"tex_ch02_00_133_0_2_IMLM4","waist":"tex_ch02_00_133_0_3_IMLM4","legs":"tex_ch02_00_133_0_4_IMLM4"},"136":{"head":"tex_ch02_00_121_0_0_IMLM4","chest":"tex_ch02_00_121_0_1_IMLM4","arms":"tex_ch02_00_121_0_2_IMLM4","waist":"tex_ch02_00_121_0_3_IMLM4","legs":"tex_ch02_00_121_0_4_IMLM4"},"137":{"head":"tex_ch02_00_074_0_0_IMLM4","chest":"tex_ch02_00_074_0_1_IMLM4","arms":"tex_ch02_00_074_0_2_IMLM4","waist":"tex_ch02_00_074_0_3_IMLM4","legs":"tex_ch02_00_074_0_4_IMLM4"},"138":{"head":"tex_ch02_00_011_0_0_IMLM4"},"139":{"head":"tex_ch02_00_083_0_0_IMLM4","chest":"tex_ch02_00_083_0_1_IMLM4","arms":"tex_ch02_00_083_0_2_IMLM4","waist":"tex_ch02_00_083_0_3_IMLM4","legs":"tex_ch02_00_083_0_4_IMLM4"},"140":{"legs":"tex_ch02_00_048_0_4_IMLM4"},"141":{"head":"tex_ch02_00_103_0_0_IMLM4","chest":"tex_ch02_00_103_0_1_IMLM4","arms":"tex_ch02_00_103_0_2_IMLM4","waist":"tex_ch02_00_103_0_3_IMLM4","legs":"tex_ch02_00_103_0_4_IMLM4"},"142":{"head":"tex_ch02_00_027_0_0_IMLM4","chest":"tex_ch02_00_027_0_1_IMLM4","arms":"tex_ch02_00_027_0_2_IMLM4","waist":"tex_ch02_00_027_0_3_IMLM4","legs":"tex_ch02_00_027_0_4_IMLM4"},"143":{"head":"tex_ch02_00_003_0_0_IMLM4","chest":"tex_ch02_00_039_0_1_IMLM4","arms":"tex_ch02_00_003_0_2_IMLM4","waist":"tex_ch02_00_003_0_3_IMLM4","legs":"tex_ch02_00_003_0_4_IMLM4"},"144":{"head":"tex_ch02_00_124_0_0_IMLM4","chest":"tex_ch02_00_124_0_1_IMLM4","legs":"tex_ch02_00_124_0_4_IMLM4"},"145":{"head":"tex_ch02_00_111_0_0_IMLM4","chest":"tex_ch02_00_111_0_1_IMLM4","arms":"tex_ch02_00_111_0_2_IMLM4","waist":"tex_ch02_00_111_0_3_IMLM4","legs":"tex_ch02_00_111_0_4_IMLM4"},"146":{"head":"tex_ch02_00_026_0_0_IMLM4","chest":"tex_ch02_00_026_0_1_IMLM4","arms":"tex_ch02_00_026_0_2_IMLM4","waist":"tex_ch02_00_026_0_3_IMLM4","legs":"tex_ch02_00_026_0_4_IMLM4"},"147":{"head":"tex_ch02_00_107_0_0_IMLM4","chest":"tex_ch02_00_107_0_1_IMLM4","arms":"tex_ch02_00_107_0_2_IMLM4","waist":"tex_ch02_00_107_0_3_IMLM4","legs":"tex_ch02_00_107_0_4_IMLM4"},"148":{"head":"tex_ch02_00_004_0_0_IMLM4","chest":"tex_ch02_00_041_0_1_IMLM4","arms":"tex_ch02_00_004_0_2_IMLM4","waist":"tex_ch02_00_004_0_3_IMLM4","legs":"tex_ch02_00_004_0_4_IMLM4"},"149":{"head":"tex_ch02_00_070_0_0_IMLM4","chest":"tex_ch02_00_070_0_1_IMLM4","arms":"tex_ch02_00_070_0_2_IMLM4","waist":"tex_ch02_00_070_0_3_IMLM4","legs":"tex_ch02_00_070_0_4_IMLM4"},"150":{"head":"tex_ch02_00_014_0_0_IMLM4"},"151":{"head":"tex_ch02_00_140_0_0_IMLM4"},"152":{"head":"tex_ch02_00_023_0_0_IMLM4","chest":"tex_ch02_00_023_0_1_IMLM4","arms":"tex_ch02_00_023_0_2_IMLM4","waist":"tex_ch02_00_023_0_3_IMLM4","legs":"tex_ch02_00_023_0_4_IMLM4"},"164":{"head":"tex_ch02_00_117_0_0_IMLM4","chest":"tex_ch02_00_117_0_1_IMLM4","arms":"tex_ch02_00_117_0_2_IMLM4","waist":"tex_ch02_00_117_0_3_IMLM4","legs":"tex_ch02_00_117_0_4_IMLM4"},"174":{"head":"tex_ch02_00_030_0_0_IMLM4","chest":"tex_ch02_00_030_0_1_IMLM4","arms":"tex_ch02_00_030_0_2_IMLM4","waist":"tex_ch02_00_030_0_3_IMLM4","legs":"tex_ch02_00_030_0_4_IMLM4"},"185":{"head":"tex_ch02_00_113_0_0_IMLM4","chest":"tex_ch02_00_113_0_1_IMLM4","arms":"tex_ch02_00_113_0_2_IMLM4","waist":"tex_ch02_00_113_0_3_IMLM4","legs":"tex_ch02_00_113_0_4_IMLM4"},"193":{"head":"tex_ch02_00_121_0_0_IMLM4","chest":"tex_ch02_00_121_0_1_IMLM4","arms":"tex_ch02_00_121_0_2_IMLM4","waist":"tex_ch02_00_121_0_3_IMLM4","legs":"tex_ch02_00_121_0_4_IMLM4"}};
+/* mappa id-set MHDB -> render del set intero (Title Update, fonte MH Wiki); figura mostrata quando il loadout e un set unico */
+const ARMOR_SET_RENDER = {"153":"set_153_render","155":"set_155_render","158":"set_158_render","163":"set_163_render","166":"set_166_render","167":"set_167_render","168":"set_168_render","169":"set_169_render","170":"set_170_render","173":"set_173_render","176":"set_176_render","178":"set_178_render","180":"set_180_render","181":"set_181_render","182":"set_182_render","189":"set_189_render","190":"set_190_render","192":"set_192_render","194":"set_194_render"};
 const imgSrc = (piece) => {
   const m = piece && ARMOR_IMG[piece.set];
   const ic = m && m[piece.slot];
   return ic ? "assets/armor/" + ic + ".webp" : null;
 };
+/* render a figura intera del set (solo set con render, es. Title Update) */
+const setRenderSrc = (setId) => {
+  const r = (setId != null) && ARMOR_SET_RENDER[setId];
+  return r ? "assets/armor/" + r + ".webp" : null;
+};
 const MANNE_ORDER = ["head", "chest", "arms", "waist", "legs"];
+
+/* immagine armatura con degrado morbido: se il file manca/404, mostra il
+   fallback (icona slot) invece dell'immagine-rotta + testo alt. */
+function ArmorImg({ src, alt, className, fallback }) {
+  const [err, setErr] = useState(false);
+  useEffect(() => { setErr(false); }, [src]);   // nuova src → riprova
+  if (!src || err) return fallback;
+  return <img className={className} src={src} alt={alt || ""} onError={() => setErr(true)} />;
+}
 
 function Mannequin({ lo, pieceById, weaponById }) {
   const [hover, setHover] = useState(null);
@@ -836,6 +864,13 @@ function Mannequin({ lo, pieceById, weaponById }) {
   const withImg = equipped.filter(p => imgSrc(p.piece)).length;
   const weapon = weaponById[lo.weapon];
   const hasWeapon = weapon && weapon.id !== "w0";
+
+  /* la figura intera compare SOLO a set completo: tutti e 5 gli slot dello stesso
+     set, e quel set ha un render (es. Title Update). Set parziali o misti -> tessere. */
+  const uniqueSets = [...new Set(equipped.map(p => p.piece.set))];
+  const fullSet = equipped.length === MANNE_ORDER.length && uniqueSets.length === 1;
+  const setRender = fullSet ? setRenderSrc(uniqueSets[0]) : null;
+  const setName = setRender ? equipped[0].piece.setName : null;
 
   const enter = (slot) => setHover(slot);
   const toggle = (slot) => setHover(h => h === slot ? null : slot);
@@ -850,9 +885,8 @@ function Mannequin({ lo, pieceById, weaponById }) {
         style={p ? { borderColor: rarCol(p.rarity) } : null}
         title={p ? p.setName : SLOT_LABEL[slot]}
         onMouseEnter={() => enter(slot)} onClick={() => toggle(slot)}>
-        {src
-          ? <img className="mn-img" src={src} alt={p.setName} />
-          : <span className="mn-fallback">{ICONS[slot]}</span>}
+        <ArmorImg src={src} alt={p ? p.setName : ""} className="mn-img"
+          fallback={<span className="mn-fallback">{ICONS[slot]}</span>} />
       </div>
     );
   };
@@ -860,15 +894,104 @@ function Mannequin({ lo, pieceById, weaponById }) {
     <div className="mh-manne">
       <div className="mh-eyebrow">Anteprima estetica</div>
       <div className="mh-manne-stage" onMouseLeave={() => setHover(null)}>
-        <div className="mn-figure">
-          {MANNE_ORDER.map(slot => tile(slot))}
-        </div>
+        {setRender
+          ? <div className="mn-setrender"><img className="mn-setimg" src={setRender} alt={setName} title={setName} /></div>
+          : <div className="mn-figure">
+              {MANNE_ORDER.map(slot => tile(slot))}
+            </div>}
       </div>
       <div className="mh-manne-cap">
         {equipped.length === 0
           ? <span className="mh-manne-hint">Equipaggia l'armatura per vestire il manichino</span>
-          : <span className="mh-manne-hint">{equipped.length}/5 pezzi{withImg < equipped.length ? ` · ${withImg} con immagine` : ""}</span>}
+          : setRender
+            ? <span className="mh-manne-hint">Set completo · {setName}</span>
+            : <span className="mh-manne-hint">{equipped.length}/5 pezzi{withImg < equipped.length ? ` · ${withImg} con immagine` : ""}</span>}
       </div>
+    </div>
+  );
+}
+
+/* ------------------------- manichino compatto (inventario) ----------------
+   Versione ridotta e non interattiva del manichino, per le card della galleria.
+   Riusa gli stessi asset e la stessa logica set-completo del Mannequin grande. */
+function MannequinThumb({ lo, pieceById }) {
+  const pieces = (lo && lo.pieces) || {};
+  const parts = MANNE_ORDER.map(slot => ({ slot, piece: pieceById[pieces[slot]] }));
+  const equipped = parts.filter(p => p.piece);
+  const uniqueSets = [...new Set(equipped.map(p => p.piece.set))];
+  const fullSet = equipped.length === MANNE_ORDER.length && uniqueSets.length === 1;
+  const setRender = fullSet ? setRenderSrc(uniqueSets[0]) : null;
+  if (setRender) return <div className="mn-thumb"><img className="mn-thumb-set" src={setRender} alt="" /></div>;
+  return (
+    <div className="mn-thumb"><div className="mn-thumb-figure">
+      {parts.map(({ slot, piece }) => {
+        const src = piece ? imgSrc(piece) : null;
+        return (
+          <div key={slot} className={"mn-thumb-tile" + (piece ? " on" : " empty")}
+            style={piece ? { borderColor: rarCol(piece.rarity) } : null}
+            title={piece ? piece.setName : SLOT_LABEL[slot]}>
+            <ArmorImg src={src} alt="" fallback={<span className="mn-thumb-ic">{ICONS[slot]}</span>} />
+          </div>
+        );
+      })}
+    </div></div>
+  );
+}
+
+/* ------------------------- inventario ------------------------------------- */
+/* colore accento per rank (striscia superiore card + medaglione), coerente con .grade-* */
+const GRADE_COL = { S: "#f0b03e", A: "#5fae7f", B: "#6bb8c9", C: "#c9a86b", D: "#a2957b" };
+
+/* Galleria dei manichini di tutte le build salvate. Si selezionano quelle da
+   mettere a confronto (>=2) e si passa alla scheda Confronto già filtrata. */
+function Inventory({ builds, selIds, setSelIds, toggleSel, del, load, goBuild, goCompare, pieceById }) {
+  if (builds.length === 0)
+    return <div className="mh-inv"><p className="mh-empty big">Nessuna build salvata. Creane una nel <button className="mh-link" onClick={goBuild}>Costruttore</button> e premi Salva.</p></div>;
+  const selCount = builds.filter(b => selIds.includes(b.id)).length;
+  const allSel = selCount === builds.length;
+  const toggleAll = () => setSelIds(allSel ? [] : builds.map(b => b.id));
+  return (
+    <div className="mh-inv">
+      <div className="mh-invbar">
+        <div className="mh-invtitle"><span className="mh-invtitle-ic">◈</span>Inventario<em>{builds.length} build salvate</em></div>
+        <div className="mh-invtools">
+          <button className="mh-ghostbtn" onClick={toggleAll}>{allSel ? "Deseleziona tutti" : "Seleziona tutti"}</button>
+          <span className={"mh-invcount" + (selCount ? " on" : "")}>{selCount} {selCount === 1 ? "selezionata" : "selezionate"}</span>
+          <button className="mh-btn" onClick={goCompare} disabled={selCount < 2} title={selCount < 2 ? "Seleziona almeno 2 build" : "Apri il confronto"}>⚔ Confronta ({selCount})</button>
+        </div>
+      </div>
+      <div className="mh-invgrid">
+        {builds.map(b => {
+          const sel = selIds.includes(b.id);
+          return (
+            <div key={b.id} className={"mh-invcard" + (sel ? " sel" : "")} onClick={() => toggleSel(b.id)}
+              style={{ "--gcol": GRADE_COL[b.grade] || GRADE_COL.C }}
+              title={sel ? "Clicca per deselezionare" : "Clicca per selezionare"}>
+              <div className="mh-invcard-stage">
+                <span className={"mh-invmedal mh-grade grade-" + (b.grade || "C")}>{b.grade || "–"}</span>
+                <span className={"mh-invcheck" + (sel ? " on" : "")}>{sel ? "✓" : ""}</span>
+                <MannequinThumb lo={b.lo} pieceById={pieceById} />
+              </div>
+              <div className="mh-invcard-body">
+                <div className="mh-invcard-name" title={b.name}>{b.name}</div>
+                <span className={"mh-invcard-wpn" + (b.weapon ? "" : " empty")} title={b.weapon || "Nessuna arma"}>
+                  <span className="mh-invwpn-ic">⚔</span>{b.weapon || "Nessuna arma"}</span>
+                <div className="mh-invcard-stats">
+                  <div className="mh-invstat voto"><b>{b.overall ?? "–"}</b><span>Voto</span></div>
+                  <div className="mh-invstat"><b>{b.efr || "–"}</b><span>EFR</span></div>
+                  <div className="mh-invstat"><b>{b.def}</b><span>Difesa</span></div>
+                </div>
+              </div>
+              <div className="mh-invcard-actions" onClick={e => e.stopPropagation()}>
+                <button className="mh-invload" onClick={() => load(b)} disabled={!b.lo}
+                  title={b.lo ? "Carica e modifica" : "Build precedente all'aggiornamento: non caricabile"}>Carica</button>
+                <button className="mh-invdel" onClick={() => del(b.id)} title="Elimina build">×</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <button className="mh-link" onClick={goBuild} style={{ marginTop: 16 }}>← Torna al costruttore</button>
     </div>
   );
 }
@@ -1037,7 +1160,7 @@ function Resources({ materials, owned, setOwned, goBuild }) {
 }
 
 /* ------------------------- confronto -------------------------------------- */
-function Compare({ builds, del, load, goBuild }) {
+function Compare({ builds, del, load, goBuild, filtered, totalCount, goInventory, clearSel }) {
   if (builds.length === 0)
     return <div className="mh-compare"><p className="mh-empty big">Nessuna build salvata. Creane una nel <button className="mh-link" onClick={goBuild}>Costruttore</button> e premi Salva.</p></div>;
   const names = []; const seen = new Set();
@@ -1050,6 +1173,13 @@ function Compare({ builds, del, load, goBuild }) {
   const maxEfr = Math.max(...builds.map(b => b.efr || 0));
   return (
     <div className="mh-compare">
+      {filtered && (
+        <div className="mh-cselbar">
+          <span>Confronto di <b>{builds.length}</b> build selezionate{totalCount > builds.length ? ` su ${totalCount}` : ""} nell'Inventario.</span>
+          <button className="mh-link" onClick={clearSel}>Mostra tutte</button>
+          <button className="mh-link" onClick={goInventory}>← Inventario</button>
+        </div>
+      )}
       <div className="mh-ctablewrap"><table className="mh-ctable">
         <thead><tr><th className="mh-ccorner">Confronto</th>
           {builds.map(b => <th key={b.id}><div className="mh-cbuild">
@@ -1345,20 +1475,28 @@ function WeaponMods({ data, weapon, wmods, onPatch, onSlots, onSkills }) {
 /* =============================== stile ==================================== */
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&display=swap');
-.mh-root{--bg:#14100b;--panel:#1e1810;--line:#3a2f1e;--bone:#ece1cb;--muted:#a2957b;--gold:#f0b03e;--gold-dim:#b5832b;--ember:#d1603a;--jade:#5fae7f;
-  background:radial-gradient(120% 80% at 50% -10%,#241a0f 0%,var(--bg) 55%);color:var(--bone);min-height:100vh;padding-bottom:36px;
+.mh-root{--bg:#14100b;--panel:#1e1810;--panel2:#171009;--ink:#0f0b07;--line:#3a2f1e;--line2:#4a3b25;--bone:#ece1cb;--muted:#a2957b;--gold:#f0b03e;--gold-dim:#b5832b;--ember:#d1603a;--jade:#86b06a;--sage:#9cb573;--amber:#cf8a2a;--accent-v:linear-gradient(180deg,var(--sage),var(--gold) 52%,var(--amber));--accent-h:linear-gradient(90deg,var(--sage),var(--gold) 50%,var(--amber));
+  background:
+    radial-gradient(130% 80% at 50% -12%,#33240f 0%,transparent 50%),
+    radial-gradient(70% 45% at 88% 4%,rgba(209,96,58,.07),transparent 60%),
+    radial-gradient(60% 40% at 8% 2%,rgba(240,176,62,.05),transparent 60%),
+    var(--bg);
+  background-attachment:fixed;color:var(--bone);min-height:100vh;padding-bottom:36px;
   font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;}
 .mh-root *{box-sizing:border-box;}
-.mh-header{display:flex;align-items:center;gap:13px;padding:18px 18px 14px;max-width:1140px;margin:0 auto;border-bottom:1px solid var(--line);}
-.mh-crest{font-size:24px;color:var(--gold);filter:drop-shadow(0 0 10px rgba(240,176,62,.4));}
-.mh-crest.big{font-size:44px;animation:pulse 1.6s ease-in-out infinite;}
+.mh-header{position:relative;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:20px 20px 17px;max-width:1140px;margin:0 auto;border-bottom:1px solid var(--gold-dim);}
+.mh-header::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:linear-gradient(90deg,transparent,var(--sage),var(--gold),var(--amber),transparent);opacity:.75;pointer-events:none;}
+.mh-brand{display:flex;align-items:center;gap:14px;min-width:0;}
+.mh-headmeta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.mh-titlewrap{min-width:0;}
+.mh-crest{display:grid;place-items:center;width:48px;height:48px;flex:none;font-size:22px;color:var(--gold);border:1px solid var(--gold-dim);border-radius:14px;background:radial-gradient(circle at 50% 32%,rgba(240,176,62,.2),#140f09 72%);box-shadow:0 0 20px rgba(240,176,62,.2),inset 0 0 14px rgba(0,0,0,.55);}
+.mh-crest.big{width:auto;height:auto;border:none;border-radius:0;background:none;box-shadow:none;font-size:44px;animation:pulse 1.6s ease-in-out infinite;filter:drop-shadow(0 0 10px rgba(240,176,62,.4));}
+.mh-logo{height:56px;width:auto;flex:none;display:block;filter:drop-shadow(0 2px 7px rgba(0,0,0,.55));}
 @keyframes pulse{0%,100%{opacity:.5;}50%{opacity:1;}}
-.mh-titlewrap{flex:1;}
-.mh-header h1{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:24px;letter-spacing:.06em;text-transform:uppercase;margin:0;line-height:1;}
-.mh-sub{margin:2px 0 0;font-size:11px;color:var(--muted);letter-spacing:.16em;text-transform:uppercase;}
-.mh-badge{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:5px 10px;border-radius:20px;border:1px solid var(--line);text-align:center;}
+.mh-header h1{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:28px;letter-spacing:.09em;text-transform:uppercase;margin:0;line-height:1;background:linear-gradient(180deg,#ffe7b0 0%,#f0b03e 55%,#c98f2f 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;filter:drop-shadow(0 1px 6px rgba(240,176,62,.22));}
+.mh-sub{margin:3px 0 0;font-size:11px;color:var(--gold-dim);letter-spacing:.22em;text-transform:uppercase;font-weight:600;}
+.mh-badge{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:6px 12px;border-radius:20px;border:1px solid var(--line);text-align:center;background:#0f0b07;}
 .mh-badge.live{color:var(--jade);border-color:#33513f;} .mh-badge.offline{color:var(--ember);border-color:#5a3226;}
-.mh-header{flex-wrap:wrap;}
 .mh-acct{display:inline-flex;align-items:center;gap:7px;background:#0f0b07;border:1px solid var(--line);color:var(--muted);border-radius:20px;padding:5px 12px;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:12px;letter-spacing:.04em;cursor:pointer;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .mh-acct:hover{border-color:var(--gold-dim);color:var(--bone);}
 .mh-acct.on{color:var(--jade);border-color:#33513f;}
@@ -1386,22 +1524,30 @@ const CSS = `
 .mh-acct-err{font-size:12px;color:var(--ember);margin:0;line-height:1.4;}
 .mh-acct-ok{font-size:12px;color:var(--jade);margin:0;line-height:1.4;}
 .mh-syncmsg{font-size:11px;color:var(--muted);margin:6px 0 0;font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.04em;text-align:right;}
-.mh-tabs{max-width:1140px;margin:0 auto;padding:14px 18px 0;display:flex;gap:8px;}
-.mh-tabs button{background:transparent;border:1px solid var(--line);color:var(--muted);font-family:'Rajdhani',sans-serif;font-weight:600;font-size:13px;letter-spacing:.1em;text-transform:uppercase;padding:8px 16px;border-radius:8px 8px 0 0;cursor:pointer;}
-.mh-tabs button.on{color:var(--gold);border-color:var(--gold-dim);border-bottom-color:var(--bg);background:var(--panel);}
+.mh-tabs{max-width:1140px;margin:0 auto;padding:16px 18px 0;display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);}
+.mh-tabs button{position:relative;top:1px;display:inline-flex;align-items:center;gap:8px;background:linear-gradient(180deg,#1b140c,#120d07);border:1px solid var(--line);border-bottom:none;color:var(--muted);font-family:'Rajdhani',sans-serif;font-weight:700;font-size:13px;letter-spacing:.12em;text-transform:uppercase;padding:10px 18px;border-radius:10px 10px 0 0;cursor:pointer;transition:color .15s,border-color .15s,background .15s;}
+.mh-tabs button:hover{color:var(--bone);border-color:var(--gold-dim);}
+.mh-tabs button.on{color:var(--gold);border-color:var(--gold-dim);background:linear-gradient(180deg,#2a1e11,var(--panel));}
+.mh-tabs button.on::after{content:"";position:absolute;left:12px;right:12px;top:0;height:2px;background:var(--accent-h);border-radius:2px;box-shadow:0 0 9px rgba(240,176,62,.6);}
+.mh-tab-ic{font-size:12px;opacity:.9;}
 .mh-grid{max-width:1140px;margin:0 auto;padding:18px;display:grid;grid-template-columns:1fr;gap:20px;}
 @media(min-width:880px){.mh-grid{grid-template-columns:1.12fr .88fr;align-items:start;}}
-.mh-eyebrow{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold-dim);margin:0 0 11px;display:flex;align-items:center;gap:10px;}
-.mh-eyebrow::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent);}
+.mh-eyebrow{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--gold);margin:0 0 12px;display:flex;align-items:center;gap:9px;}
+.mh-eyebrow::before{content:"◆";color:var(--gold-dim);font-size:9px;}
+.mh-eyebrow::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--sage),var(--gold-dim) 45%,transparent);}
 .mh-hint{font-size:10px;letter-spacing:.04em;color:var(--muted);text-transform:none;font-weight:500;}
-.mh-reset{margin-left:auto;background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:5px;padding:3px 9px;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:10px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;}
+.mh-reset{margin-left:auto;background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:6px;padding:3px 9px;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:10px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;transition:.15s;}
 .mh-reset:hover{color:var(--ember);border-color:var(--ember);}
-.mh-slotcard{background:linear-gradient(180deg,var(--panel),#1a140d);border:1px solid var(--line);border-radius:10px;padding:11px 13px;margin-bottom:9px;}
-.mh-slotcard-h{display:flex;align-items:center;gap:9px;margin-bottom:8px;}
-.mh-slot-icon{font-size:14px;} .mh-slot-label{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);}
-.mh-rank{margin-left:auto;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:11px;color:var(--gold);border:1px solid var(--gold-dim);border-radius:4px;padding:1px 6px;}
-.mh-select{width:100%;background:#0f0b07;color:var(--bone);border:1px solid var(--line);border-radius:7px;padding:9px 10px;font-size:14px;font-family:inherit;cursor:pointer;appearance:none;}
-.mh-select:focus{outline:2px solid var(--gold);border-color:var(--gold);}
+.mh-slotcard{position:relative;background:linear-gradient(180deg,#221a10,#160f08);border:1px solid var(--line);border-radius:12px;padding:12px 14px 12px 16px;margin-bottom:10px;transition:border-color .15s,box-shadow .15s;}
+.mh-slotcard::before{content:"";position:absolute;left:0;top:11px;bottom:11px;width:3px;border-radius:0 3px 3px 0;background:var(--accent-v);opacity:.85;}
+.mh-slotcard:hover{border-color:var(--gold-dim);box-shadow:0 6px 20px rgba(0,0,0,.32);}
+.mh-slotcard-h{display:flex;align-items:center;gap:10px;margin-bottom:9px;}
+.mh-slot-icon{display:grid;place-items:center;width:28px;height:28px;flex:none;border-radius:8px;font-size:14px;color:var(--gold);border:1px solid var(--line);background:radial-gradient(circle at 50% 38%,rgba(240,176,62,.14),#0f0b07 72%);}
+.mh-slot-label{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:12.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--bone);}
+.mh-rank{margin-left:auto;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:11px;letter-spacing:.04em;color:var(--gold);border:1px solid var(--gold-dim);border-radius:5px;padding:2px 8px;background:radial-gradient(circle at 50% 30%,rgba(240,176,62,.14),transparent);}
+.mh-select{width:100%;background:linear-gradient(180deg,#13100a,#0d0a06);color:var(--bone);border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:14px;font-family:inherit;cursor:pointer;appearance:none;transition:border-color .15s,box-shadow .15s;}
+.mh-select:hover{border-color:var(--gold-dim);}
+.mh-select:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 2px rgba(240,176,62,.22);}
 .mh-select-sm{padding:6px 9px;font-size:12.5px;}
 .mh-picker{position:relative;}
 .mh-pickbtn{display:flex;align-items:center;justify-content:space-between;text-align:left;gap:8px;}
@@ -1425,7 +1571,8 @@ const CSS = `
 .mh-slotpip{flex:none;width:22px;height:22px;border-radius:5px;display:grid;place-items:center;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:12px;border:1px solid var(--gold-dim);color:var(--gold);background:#0f0b07;}
 .mh-slotpip[data-size="3"]{border-color:var(--gold);box-shadow:inset 0 0 6px rgba(240,176,62,.25);}
 .mh-empty{font-size:13px;color:var(--muted);font-style:italic;margin:2px 0 10px;} .mh-empty.big{padding:40px 10px;text-align:center;font-size:15px;}
-.mh-summary{background:linear-gradient(180deg,#1c160e,#161009);border:1px solid var(--line);border-radius:12px;padding:17px 15px;}
+.mh-summary{position:relative;overflow:hidden;background:linear-gradient(180deg,#1c160e,#161009);border:1px solid var(--line);border-radius:12px;padding:17px 15px;}
+.mh-summary::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;background:var(--accent-h);opacity:.7;}
 @media(min-width:880px){.mh-summary{position:sticky;top:14px;}}
 .mh-manne{margin-bottom:15px;}
 .mh-manne-stage{display:flex;justify-content:center;background:#0f0b07;border:1px solid var(--line);border-radius:10px;padding:12px 8px;position:relative;overflow:hidden;}
@@ -1436,6 +1583,8 @@ const CSS = `
 .mn-tile.empty{border-style:dashed;border-color:#2a2117;opacity:.45;height:46px;}
 .mn-tile.hl{box-shadow:0 0 0 1px rgba(240,176,62,.5),0 0 11px rgba(240,176,62,.4);transform:translateY(-1px);}
 .mn-img{max-width:100%;max-height:100%;object-fit:contain;display:block;filter:drop-shadow(0 1px 3px rgba(0,0,0,.55));}
+.mn-setrender{display:flex;justify-content:center;align-items:center;width:100%;max-width:220px;position:relative;}
+.mn-setimg{max-width:100%;max-height:446px;object-fit:contain;display:block;filter:drop-shadow(0 2px 7px rgba(0,0,0,.6));}
 .mn-fallback{font-size:30px;opacity:.7;line-height:1;}
 .mh-manne-cap{text-align:center;margin-top:8px;min-height:17px;}
 .mh-manne-hint{font-size:11.5px;color:var(--muted);font-style:italic;}
@@ -1474,8 +1623,8 @@ const CSS = `
 .mh-pips[data-cat="util"] .mh-pip.on{background:#7a8a4d;border-color:#7a8a4d;} .mh-pips[data-cat="util"] .mh-pip.on.full{background:#a7c96b;border-color:#a7c96b;box-shadow:0 0 6px rgba(167,201,107,.5);}
 .mh-skill-desc{margin-top:6px;font-size:12px;color:var(--muted);line-height:1.5;background:#0f0b07;border:1px solid var(--line);border-radius:6px;padding:7px 9px;}
 .mh-save{display:flex;gap:7px;margin-top:16px;}
-.mh-input{flex:1;background:#0f0b07;border:1px solid var(--line);border-radius:7px;color:var(--bone);padding:8px 10px;font-size:13px;font-family:inherit;}
-.mh-input:focus{outline:2px solid var(--gold);border-color:var(--gold);}
+.mh-input{flex:1;background:linear-gradient(180deg,#13100a,#0d0a06);border:1px solid var(--line);border-radius:8px;color:var(--bone);padding:9px 11px;font-size:13px;font-family:inherit;transition:border-color .15s,box-shadow .15s;}
+.mh-input:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 2px rgba(240,176,62,.22);}
 .mh-btn{background:var(--gold);color:#1a1207;border:none;border-radius:7px;padding:8px 15px;font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:12.5px;cursor:pointer;}
 .mh-btn:hover{background:#ffc24d;}
 .mh-saved{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:11px;}
@@ -1488,16 +1637,16 @@ const CSS = `
 .mh-cbuild .mh-cload:hover{color:var(--gold);text-decoration:underline;}
 .mh-link{background:transparent;border:none;color:var(--gold);font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.06em;text-transform:uppercase;font-size:12px;cursor:pointer;padding:3px 4px;}
 .mh-compare{max-width:1140px;margin:0 auto;padding:18px;}
-.mh-ctablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;}
+.mh-ctablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:linear-gradient(180deg,#1c160e,#161009);}
 .mh-ctable{border-collapse:collapse;width:100%;min-width:420px;}
 .mh-ctable th,.mh-ctable td{padding:8px 12px;text-align:center;border-bottom:1px solid #241c11;font-size:13px;}
-.mh-ctable thead th{background:#0f0b07;position:sticky;top:0;}
+.mh-ctable thead th{background:#120d08;position:sticky;top:0;border-bottom:2px solid var(--gold-dim);}
 .mh-ccorner{text-align:left!important;font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--gold-dim);font-size:11px;}
 .mh-cbuild{display:flex;align-items:center;justify-content:center;gap:6px;font-family:'Rajdhani',sans-serif;font-weight:700;color:var(--bone);}
 .mh-cbuild button{background:transparent;border:none;color:var(--muted);cursor:pointer;font-size:15px;} .mh-cbuild button:hover{color:var(--ember);}
 .mh-ctable td:first-child,.mh-cskill{text-align:left!important;color:var(--muted);}
 .mh-crow-stat td{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:15px;color:var(--bone);}
-.mh-csection td{background:#0f0b07;text-align:left;font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--gold-dim);font-size:11px;}
+.mh-csection td{background:linear-gradient(90deg,rgba(156,181,115,.07),#0f0b07 45%);text-align:left;font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);font-size:11px;border-left:2px solid var(--gold-dim);}
 .mh-ctable td.best{color:var(--gold);font-weight:700;background:rgba(240,176,62,.08);} .mh-ctable td.zero{color:#4a4030;}
 .mh-loading{min-height:70vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--muted);text-align:center;padding:0 20px;}
 .mh-loading p{font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--bone);margin:0;}
@@ -1508,19 +1657,67 @@ const CSS = `
 .mh-grade{flex:none;width:62px;display:grid;place-items:center;border-radius:9px;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:38px;line-height:1;border:1px solid var(--line);}
 .mh-grade.sm{width:30px;height:30px;font-size:17px;margin:0 auto;}
 .grade-S{color:#f0b03e;border-color:#b5832b;background:radial-gradient(circle at 50% 35%,rgba(240,176,62,.28),transparent 70%);text-shadow:0 0 12px rgba(240,176,62,.6);}
-.grade-A{color:#5fae7f;border-color:#33513f;background:radial-gradient(circle at 50% 35%,rgba(95,174,127,.22),transparent 70%);}
+.grade-A{color:var(--sage);border-color:#4d5a35;background:radial-gradient(circle at 50% 35%,rgba(156,181,115,.22),transparent 70%);}
 .grade-B{color:#6bb8c9;border-color:#33505a;background:radial-gradient(circle at 50% 35%,rgba(107,184,201,.18),transparent 70%);}
 .grade-C{color:#c9a86b;border-color:#5a4a2e;}
 .grade-D{color:#a2957b;border-color:var(--line);}
+/* --- inventario (galleria manichini + selezione) --- */
+.mh-inv{max-width:1140px;margin:0 auto;padding:18px;}
+.mh-invbar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:20px;padding-bottom:15px;border-bottom:1px solid var(--line);}
+.mh-invtitle{display:flex;align-items:baseline;gap:9px;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:19px;letter-spacing:.14em;text-transform:uppercase;color:var(--bone);}
+.mh-invtitle-ic{color:var(--gold);font-size:16px;filter:drop-shadow(0 0 7px rgba(240,176,62,.5));}
+.mh-invtitle em{font-style:normal;font-size:11.5px;font-weight:600;letter-spacing:.08em;color:var(--muted);}
+.mh-invtools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.mh-ghostbtn{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;padding:7px 13px;font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.06em;text-transform:uppercase;font-size:11.5px;cursor:pointer;transition:.15s;}
+.mh-ghostbtn:hover{border-color:var(--gold-dim);color:var(--bone);}
+.mh-invcount{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:#0f0b07;border:1px solid var(--line);border-radius:20px;padding:6px 12px;transition:.15s;}
+.mh-invcount.on{color:var(--gold);border-color:var(--gold-dim);}
+.mh-btn:disabled{background:#2a2216;color:#6b5c44;cursor:default;}
+.mh-invgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(216px,1fr));gap:16px;}
+.mh-invcard{position:relative;background:linear-gradient(180deg,#221a10,#181207);border:1px solid var(--line);border-radius:14px;padding:12px;cursor:pointer;transition:border-color .15s,box-shadow .18s,transform .12s;display:flex;flex-direction:column;gap:11px;overflow:hidden;}
+.mh-invcard::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,transparent,var(--gcol,var(--gold-dim)),transparent);opacity:.85;}
+.mh-invcard:hover{border-color:var(--gold-dim);transform:translateY(-3px);box-shadow:0 12px 28px rgba(0,0,0,.42);}
+.mh-invcard.sel{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold),0 0 22px rgba(240,176,62,.22);}
+.mh-invcard-stage{position:relative;}
+.mh-invmedal{position:absolute;top:8px;left:8px;z-index:3;width:36px;height:36px;font-size:20px;box-shadow:0 2px 9px rgba(0,0,0,.55);}
+.mh-invcheck{position:absolute;top:8px;right:8px;z-index:3;display:grid;place-items:center;width:24px;height:24px;border-radius:7px;border:1px solid var(--line);background:rgba(15,11,7,.82);color:transparent;font-size:14px;font-weight:700;transition:.15s;}
+.mh-invcheck.on{background:var(--gold);color:#1a1207;border-color:var(--gold);box-shadow:0 0 11px rgba(240,176,62,.55);}
+.mn-thumb{display:flex;align-items:center;justify-content:center;min-height:158px;background:radial-gradient(80% 70% at 50% 30%,#181209,#0d0906);border:1px solid var(--line);border-radius:10px;padding:12px 8px 16px;overflow:hidden;position:relative;}
+.mn-thumb::before{content:"";position:absolute;inset:0;background:radial-gradient(58% 44% at 50% 32%,rgba(240,176,62,.10),transparent 72%);pointer-events:none;}
+.mn-thumb::after{content:"";position:absolute;left:50%;bottom:9px;transform:translateX(-50%);width:66%;height:13px;border-radius:50%;background:radial-gradient(ellipse at center,rgba(0,0,0,.55),transparent 72%);pointer-events:none;}
+.mn-thumb-figure{display:flex;flex-direction:column;align-items:center;gap:3px;width:100%;max-width:116px;position:relative;z-index:1;}
+.mn-thumb-tile{width:100%;height:35px;display:flex;align-items:center;justify-content:center;border:1.5px solid var(--line);border-radius:7px;background:#140f09;overflow:hidden;}
+.mn-thumb-tile.empty{border-style:dashed;border-color:#2a2117;opacity:.4;height:20px;}
+.mn-thumb-tile img{max-width:100%;max-height:100%;object-fit:contain;}
+.mn-thumb-ic{font-size:14px;filter:grayscale(.3);}
+.mn-thumb-set{max-height:210px;max-width:100%;object-fit:contain;position:relative;z-index:1;}
+.mh-invcard-body{display:flex;flex-direction:column;gap:8px;}
+.mh-invcard-name{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:16px;color:var(--bone);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.03em;}
+.mh-invcard-wpn{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;max-width:100%;background:#0f0b07;border:1px solid var(--line);border-radius:20px;padding:3px 10px 3px 8px;font-size:11px;font-weight:600;color:var(--bone);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mh-invcard-wpn.empty{color:var(--muted);font-style:italic;font-weight:500;}
+.mh-invwpn-ic{color:var(--gold-dim);font-size:12px;flex:none;}
+.mh-invcard-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;}
+.mh-invstat{background:#0f0b07;border:1px solid var(--line);border-radius:8px;padding:6px 3px;text-align:center;display:flex;flex-direction:column;gap:1px;}
+.mh-invstat b{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:16px;line-height:1;color:var(--bone);}
+.mh-invstat span{font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);}
+.mh-invstat.voto b{color:var(--gold);}
+.mh-invcard-actions{display:flex;align-items:center;gap:8px;margin-top:auto;}
+.mh-invload{flex:1;background:transparent;border:1px solid var(--gold-dim);color:var(--gold);border-radius:8px;padding:8px;font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:.07em;text-transform:uppercase;font-size:11.5px;cursor:pointer;transition:.15s;}
+.mh-invload:hover:not(:disabled){background:var(--gold);color:#1a1207;}
+.mh-invload:disabled{border-color:var(--line);color:#6b5c44;cursor:default;}
+.mh-invdel{flex:none;width:34px;height:33px;background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;font-size:17px;line-height:1;cursor:pointer;transition:.15s;}
+.mh-invdel:hover{border-color:var(--ember);color:var(--ember);background:rgba(209,96,58,.08);}
+.mh-cselbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;padding:9px 14px;background:linear-gradient(90deg,rgba(240,176,62,.09),transparent);border:1px solid var(--gold-dim);border-radius:10px;font-size:13px;color:var(--muted);}
+.mh-cselbar b{color:var(--gold);}
 .mh-score-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px;justify-content:center;}
 .mh-score-bars{display:flex;flex-direction:column;gap:5px;}
 .mh-sbar{display:flex;align-items:center;gap:8px;}
 .mh-sbar-l{flex:none;width:60px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);}
 .mh-sbar-track{flex:1;height:8px;background:#2a2114;border:1px solid #342810;border-radius:5px;overflow:hidden;}
 .mh-sbar-fill{height:100%;border-radius:5px;transition:width .25s;}
-.mh-sbar-fill.off{background:linear-gradient(90deg,#b5832b,#f0b03e);}
-.mh-sbar-fill.surv{background:linear-gradient(90deg,#3d6d5a,#6bb8c9);}
-.mh-sbar-fill.qol{background:linear-gradient(90deg,#5a4a8a,#9a6fc9);}
+.mh-sbar-fill.off{background:linear-gradient(90deg,#a85f1c,var(--amber));}
+.mh-sbar-fill.surv{background:linear-gradient(90deg,#5c7a3c,var(--sage));}
+.mh-sbar-fill.qol{background:linear-gradient(90deg,var(--gold-dim),var(--gold));}
 .mh-sbar-v{flex:none;width:24px;text-align:right;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:13px;color:var(--bone);}
 .mh-score-meta{display:flex;flex-wrap:wrap;gap:12px;font-size:11.5px;color:var(--muted);}
 .mh-score-meta b{color:var(--bone);font-family:'Rajdhani',sans-serif;font-weight:700;font-size:13px;margin-left:2px;}
@@ -1563,14 +1760,14 @@ const CSS = `
 .mh-trk-head{display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between;margin-bottom:10px;}
 .mh-trk-prog{flex:1;min-width:200px;}
 .mh-trk-progbar{height:9px;background:#2a2114;border:1px solid #342810;border-radius:5px;overflow:hidden;}
-.mh-trk-progfill{height:100%;background:linear-gradient(90deg,#3d6d4a,#5fae7f);border-radius:5px;transition:width .25s;}
+.mh-trk-progfill{height:100%;background:linear-gradient(90deg,#5c7a3c,var(--sage));border-radius:5px;transition:width .25s;}
 .mh-trk-progl{display:block;margin-top:5px;font-size:11.5px;color:var(--muted);font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.04em;}
 .mh-trk-meta{display:flex;align-items:center;gap:14px;font-size:12px;color:var(--muted);}
 .mh-trk-meta b{color:var(--gold);font-family:'Rajdhani',sans-serif;font-weight:700;font-size:15px;margin-left:3px;}
 .mh-trk-note{font-size:11.5px;color:var(--muted);line-height:1.55;margin:0 0 12px;}
 .mh-mattable{border-collapse:collapse;width:100%;table-layout:fixed;}
 .mh-mattable th,.mh-mattable td{padding:8px 8px;text-align:center;border-bottom:1px solid #241c11;font-size:13px;overflow-wrap:anywhere;}
-.mh-mattable thead th{background:#0f0b07;position:sticky;top:0;font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--gold-dim);font-size:11px;}
+.mh-mattable thead th{background:#120d08;position:sticky;top:0;font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--gold);font-size:11px;border-bottom:2px solid var(--gold-dim);}
 .mh-mattable th:nth-child(2),.mh-mattable td:nth-child(2){width:52px;}
 .mh-mattable th:nth-child(3),.mh-mattable td:nth-child(3){width:120px;}
 .mh-mattable th:nth-child(4),.mh-mattable td:nth-child(4){width:56px;}
@@ -1580,7 +1777,7 @@ const CSS = `
 .mh-matname-t{min-width:0;}
 .mh-mattable td{vertical-align:middle;}
 .mh-matdot{width:11px;height:11px;border-radius:50%;flex:none;border:1px solid rgba(0,0,0,.4);box-shadow:0 0 0 1px rgba(255,255,255,.06);}
-.mh-matcheck{color:#5fae7f;font-weight:700;margin-left:2px;}
+.mh-matcheck{color:var(--sage);font-weight:700;margin-left:2px;}
 .mh-matneed{font-family:'Rajdhani',sans-serif;font-weight:700;color:var(--bone);font-variant-numeric:tabular-nums;}
 .mh-matinput{width:42px;background:#0f0b07;border:1px solid var(--line);border-radius:5px;color:var(--bone);text-align:center;padding:4px 2px;font-size:13px;font-family:inherit;appearance:textfield;font-variant-numeric:tabular-nums;}
 .mh-matinput::-webkit-outer-spin-button,.mh-matinput::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
@@ -1588,7 +1785,7 @@ const CSS = `
 .mh-matrem{color:var(--ember);font-family:'Rajdhani',sans-serif;font-weight:700;font-variant-numeric:tabular-nums;}
 .mh-matok{color:#4a4030;}
 .mh-mattable tr.matdone .mh-matname{color:var(--muted);}
-.mh-mattable tr.matdone{background:rgba(95,174,127,.06);}
+.mh-mattable tr.matdone{background:rgba(156,181,115,.07);}
 `;
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
