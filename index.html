@@ -555,9 +555,15 @@ function Planner({ data, tab, setTab, sync }) {
   const selectedBuilds = builds.filter(b => selIds.includes(b.id));
   const compareBuilds = selectedBuilds.length ? selectedBuilds : builds;
 
-  if (tab === "inventory") return <Inventory builds={builds} selIds={selIds} setSelIds={setSelIds} toggleSel={toggleSel} del={del} load={(b) => { load(b); setTab("build"); }} goBuild={() => setTab("build")} goCompare={() => setTab("compare")} pieceById={pieceById} />;
+  if (tab === "inventory") return <Inventory builds={builds} selIds={selIds} setSelIds={setSelIds} toggleSel={toggleSel} del={del} load={(b) => { load(b); setTab("build"); }} goBuild={() => setTab("build")} goCompare={() => setTab("compare")} goResources={() => setTab("resources")} pieceById={pieceById} />;
   if (tab === "compare") return <Compare builds={compareBuilds} filtered={selectedBuilds.length > 0} totalCount={builds.length} del={del} load={(b) => { load(b); setTab("build"); }} goBuild={() => setTab("build")} goInventory={() => setTab("inventory")} clearSel={() => setSelIds([])} />;
-  if (tab === "resources") return <Resources materials={materials} owned={owned} setOwned={persistOwned} goBuild={() => setTab("build")} />;
+  if (tab === "resources") {
+    const maps = { pieceById, weaponById, charmById };
+    const groups = selectedBuilds.length
+      ? selectedBuilds.filter(b => b.lo).map(b => ({ key: b.id, title: b.name, grade: b.grade, materials: aggregateMaterials(b.lo, maps) })).filter(g => g.materials.list.length)
+      : (materials.list.length ? [{ key: "current", title: null, grade: null, materials }] : []);
+    return <Resources groups={groups} fromSelection={selectedBuilds.length > 0} owned={owned} setOwned={persistOwned} goBuild={() => setTab("build")} goInventory={() => setTab("inventory")} />;
+  }
 
   const weapon = weaponById[lo.weapon];
   const weaponEff = effectiveWeapon(weapon, lo.wmods);
@@ -944,7 +950,7 @@ const GRADE_COL = { S: "#f0b03e", A: "#5fae7f", B: "#6bb8c9", C: "#c9a86b", D: "
 
 /* Galleria dei manichini di tutte le build salvate. Si selezionano quelle da
    mettere a confronto (>=2) e si passa alla scheda Confronto già filtrata. */
-function Inventory({ builds, selIds, setSelIds, toggleSel, del, load, goBuild, goCompare, pieceById }) {
+function Inventory({ builds, selIds, setSelIds, toggleSel, del, load, goBuild, goCompare, goResources, pieceById }) {
   if (builds.length === 0)
     return <div className="mh-inv"><p className="mh-empty big">Nessuna build salvata. Creane una nel <button className="mh-link" onClick={goBuild}>Costruttore</button> e premi Salva.</p></div>;
   const selCount = builds.filter(b => selIds.includes(b.id)).length;
@@ -957,6 +963,7 @@ function Inventory({ builds, selIds, setSelIds, toggleSel, del, load, goBuild, g
         <div className="mh-invtools">
           <button className="mh-ghostbtn" onClick={toggleAll}>{allSel ? "Deseleziona tutti" : "Seleziona tutti"}</button>
           <span className={"mh-invcount" + (selCount ? " on" : "")}>{selCount} {selCount === 1 ? "selezionata" : "selezionate"}</span>
+          <button className="mh-ghostbtn" onClick={goResources} disabled={selCount < 1} title={selCount < 1 ? "Seleziona almeno una build" : "Materiali delle build selezionate"}>Materiali ({selCount})</button>
           <button className="mh-btn" onClick={goCompare} disabled={selCount < 2} title={selCount < 2 ? "Seleziona almeno 2 build" : "Apri il confronto"}>⚔ Confronta ({selCount})</button>
         </div>
       </div>
@@ -1101,60 +1108,88 @@ function aggregateMaterials(lo, ctx) {
   return { list: Object.values(acc), zenny };
 }
 
-function Resources({ materials, owned, setOwned, goBuild }) {
-  const { list, zenny } = materials;
-  if (!list.length)
-    return <div className="mh-compare"><p className="mh-empty big">Equipaggia un'arma o dell'armatura nel <button className="mh-link" onClick={goBuild}>Costruttore</button> per vedere i materiali necessari alla build.</p></div>;
+function Resources({ groups, fromSelection, owned, setOwned, goBuild, goInventory }) {
+  if (!groups.length)
+    return <div className="mh-compare"><p className="mh-empty big">
+      {fromSelection
+        ? <>Le build selezionate non hanno un loadout richiamabile. Selezionane altre nell'<button className="mh-link" onClick={goInventory}>Inventario</button> o usa il <button className="mh-link" onClick={goBuild}>Costruttore</button>.</>
+        : <>Equipaggia un'arma o dell'armatura nel <button className="mh-link" onClick={goBuild}>Costruttore</button>, oppure seleziona delle build nell'<button className="mh-link" onClick={goInventory}>Inventario</button>, per vedere i materiali.</>}
+    </p></div>;
 
   const setOne = (id, v) => setOwned({ ...owned, [id]: Math.max(0, v | 0) });
-  const rows = list.map(m => {
+  const multi = groups.length > 1;
+  const totalZenny = groups.reduce((s, g) => s + g.materials.zenny, 0);
+  const allIds = new Set(); groups.forEach(g => g.materials.list.forEach(m => allIds.add(m.id)));
+  const clearOwned = () => { const next = { ...owned }; allIds.forEach(id => delete next[id]); setOwned(next); };
+  const rowsOf = (list) => list.map(m => {
     const have = Math.max(0, owned[m.id] || 0);
     return { ...m, have, done: have >= m.need, remain: Math.max(0, m.need - have) };
   }).sort((a, b) => (a.done - b.done) || (b.remain - a.remain) || a.name.localeCompare(b.name));
 
-  const doneCount = rows.filter(r => r.done).length;
-  const pct = Math.round(doneCount / rows.length * 100);
-  const clearOwned = () => { const next = { ...owned }; rows.forEach(r => delete next[r.id]); setOwned(next); };
+  const renderTable = (rows) => (
+    <div className="mh-ctablewrap"><table className="mh-mattable">
+      <thead><tr><th className="mh-ccorner">Materiale</th><th>Serve</th><th>Hai</th><th>Manca</th></tr></thead>
+      <tbody>
+        {rows.map(r => (
+          <tr key={r.id} className={r.done ? "matdone" : ""}>
+            <td className="mh-matname"><span className="mh-matname-in">
+              <span className="mh-matdot" style={{ background: matDot(r.icon && r.icon.color) }} />
+              <span className="mh-matname-t">{r.name}</span>{r.done && <span className="mh-matcheck">✓</span>}
+            </span></td>
+            <td className="mh-matneed">{r.need}</td>
+            <td><span className="mh-stepper">
+              <button onClick={() => setOne(r.id, r.have - 1)} disabled={r.have <= 0}>−</button>
+              <input className="mh-matinput" type="number" min="0" value={r.have} onChange={e => setOne(r.id, Number(e.target.value))} />
+              <button onClick={() => setOne(r.id, r.have + 1)}>+</button>
+            </span></td>
+            <td className={r.remain === 0 ? "mh-matok" : "mh-matrem"}>{r.remain === 0 ? "—" : r.remain}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table></div>
+  );
+
+  const single = multi ? null : rowsOf(groups[0].materials.list);
+  const singleDone = single ? single.filter(r => r.done).length : 0;
+  const singlePct = single && single.length ? Math.round(singleDone / single.length * 100) : 0;
 
   return (
     <div className="mh-trk">
       <div className="mh-trk-head">
-        <div className="mh-trk-prog">
-          <div className="mh-trk-progbar"><div className="mh-trk-progfill" style={{ width: pct + "%" }} /></div>
-          <span className="mh-trk-progl">{doneCount}/{rows.length} materiali completati · {pct}%</span>
-        </div>
+        {single
+          ? <div className="mh-trk-prog">
+              <div className="mh-trk-progbar"><div className="mh-trk-progfill" style={{ width: singlePct + "%" }} /></div>
+              <span className="mh-trk-progl">{singleDone}/{single.length} materiali completati · {singlePct}%</span>
+            </div>
+          : <div className="mh-trk-prog"><span className="mh-trk-progl">Materiali di <b style={{ color: "var(--gold)" }}>{groups.length}</b> build selezionate — divisi per build.</span></div>}
         <div className="mh-trk-meta">
-          <span>Zenny <b>{zenny.toLocaleString("it-IT")}</b></span>
+          <span>Zenny {multi ? "totale " : ""}<b>{totalZenny.toLocaleString("it-IT")}</b></span>
           <button className="mh-link" onClick={clearOwned}>azzera posseduti</button>
         </div>
       </div>
-      <p className="mh-trk-note">Include l'intero albero di potenziamento dell'arma, il crafting di ogni pezzo d'armatura e i ranghi del charm. I gioielli sono esclusi: sono drop casuali, non si forgiano. Segna quanto ne possiedi: l'inventario resta salvato tra le sessioni.</p>
-      <div className="mh-ctablewrap"><table className="mh-mattable">
-        <thead><tr><th className="mh-ccorner">Materiale</th><th>Serve</th><th>Hai</th><th>Manca</th></tr></thead>
-        <tbody>
-          {rows.map(r => (
-            <tr key={r.id} className={r.done ? "matdone" : ""}>
-              <td className="mh-matname">
-                <span className="mh-matname-in">
-                  <span className="mh-matdot" style={{ background: matDot(r.icon && r.icon.color) }} />
-                  <span className="mh-matname-t">{r.name}</span>{r.done && <span className="mh-matcheck">✓</span>}
-                </span>
-              </td>
-              <td className="mh-matneed">{r.need}</td>
-              <td>
-                <span className="mh-stepper">
-                  <button onClick={() => setOne(r.id, r.have - 1)} disabled={r.have <= 0}>−</button>
-                  <input className="mh-matinput" type="number" min="0" value={r.have}
-                    onChange={e => setOne(r.id, Number(e.target.value))} />
-                  <button onClick={() => setOne(r.id, r.have + 1)}>+</button>
-                </span>
-              </td>
-              <td className={r.remain === 0 ? "mh-matok" : "mh-matrem"}>{r.remain === 0 ? "—" : r.remain}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table></div>
-      <button className="mh-link" onClick={goBuild}>← Torna al costruttore</button>
+      <p className="mh-trk-note">Include l'intero albero di potenziamento dell'arma, il crafting di ogni pezzo d'armatura e i ranghi del charm. I gioielli sono esclusi (drop casuali). I materiali posseduti sono globali e restano salvati tra le sessioni{multi ? "; una stessa risorsa può servire a più build." : "."}</p>
+      {fromSelection && <div className="mh-cselbar" style={{ marginBottom: 14 }}><span>Materiali delle build selezionate nell'Inventario.</span><button className="mh-link" onClick={goInventory}>← Inventario</button></div>}
+      {multi
+        ? groups.map(g => {
+            const rows = rowsOf(g.materials.list);
+            const dc = rows.filter(r => r.done).length;
+            const pct = rows.length ? Math.round(dc / rows.length * 100) : 0;
+            return (
+              <div className="mh-matgroup" key={g.key}>
+                <div className="mh-matgroup-h">
+                  {g.grade && <span className={"mh-grade sm grade-" + g.grade}>{g.grade}</span>}
+                  <span className="mh-matgroup-name">{g.title}</span>
+                  <span className="mh-matgroup-meta">{dc}/{rows.length} · {pct}% · Zenny {g.materials.zenny.toLocaleString("it-IT")}</span>
+                </div>
+                {renderTable(rows)}
+              </div>
+            );
+          })
+        : renderTable(single)}
+      <div className="mh-trk-foot">
+        <button className="mh-link" onClick={goBuild}>← Torna al costruttore</button>
+        {fromSelection && <button className="mh-link" onClick={goInventory}>Inventario →</button>}
+      </div>
     </div>
   );
 }
@@ -1786,6 +1821,11 @@ const CSS = `
 .mh-matok{color:#4a4030;}
 .mh-mattable tr.matdone .mh-matname{color:var(--muted);}
 .mh-mattable tr.matdone{background:rgba(156,181,115,.07);}
+.mh-matgroup{margin-bottom:18px;}
+.mh-matgroup-h{display:flex;align-items:center;gap:10px;margin:0 0 8px;padding:0 2px;}
+.mh-matgroup-name{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:15px;letter-spacing:.04em;color:var(--bone);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.mh-matgroup-meta{margin-left:auto;flex:none;font-size:11px;color:var(--muted);font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.03em;}
+.mh-trk-foot{display:flex;gap:16px;align-items:center;margin-top:8px;}
 `;
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
