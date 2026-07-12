@@ -1284,7 +1284,9 @@ function MiniSelect({ value, onChange, options, title, className }) {
     const above = r.top - margin;
     const up = below < 160 && above > below;
     const maxH = Math.max(120, Math.min(264, up ? above : below));
-    setPos({ left: Math.round(r.left), width: Math.round(r.width), maxH,
+    const left = Math.max(margin, Math.round(r.left));
+    const maxW = Math.max(160, Math.round(window.innerWidth - left - margin));
+    setPos({ left, minW: Math.round(r.width), maxW, maxH,
       ...(up ? { bottom: Math.round(window.innerHeight - r.top + gap) } : { top: Math.round(r.bottom + gap) }) });
     const onScroll = (e) => { if (popRef.current && popRef.current.contains(e.target)) return; setOpen(false); };
     const onResize = () => setOpen(false);
@@ -1298,7 +1300,7 @@ function MiniSelect({ value, onChange, options, title, className }) {
     document.addEventListener("mousedown", onDown);
     return () => { window.removeEventListener("scroll", onScroll, true); window.removeEventListener("resize", onResize); document.removeEventListener("mousedown", onDown); };
   }, [open]);
-  const style = pos ? { position: "fixed", left: pos.left, width: pos.width, maxHeight: pos.maxH, ...(pos.top != null ? { top: pos.top } : { bottom: pos.bottom }) } : null;
+  const style = pos ? { position: "fixed", left: pos.left, minWidth: pos.minW, maxWidth: pos.maxW, width: "max-content", maxHeight: pos.maxH, ...(pos.top != null ? { top: pos.top } : { bottom: pos.bottom }) } : null;
   return (
     <div className={"mh-msel" + (className ? " " + className : "")}>
       <button type="button" ref={btnRef} className="mh-select mh-select-sm mh-mselbtn" onClick={() => setOpen(o => !o)} title={title}>
@@ -1639,7 +1641,7 @@ const CSS = `
 .mh-msel-full{display:block;width:100%;}
 .mh-mselbtn{display:flex;align-items:center;justify-content:space-between;gap:6px;width:100%;text-align:left;}
 .mh-mselcur{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.mh-mselpop{background:#1a140d;border:1px solid var(--gold-dim);border-radius:8px;box-shadow:0 14px 34px rgba(0,0,0,.62);overflow-y:auto;z-index:200;padding:3px;}
+.mh-mselpop{background:#1a140d;border:1px solid var(--gold-dim);border-radius:8px;box-shadow:0 14px 34px rgba(0,0,0,.62);overflow:hidden auto;z-index:200;padding:3px;}
 .mh-mselitem{display:block;width:100%;text-align:left;background:transparent;border:none;color:var(--bone);padding:7px 10px;border-radius:5px;cursor:pointer;font-size:13px;font-family:inherit;white-space:nowrap;}
 .mh-mselitem:hover{background:#241a0e;}
 .mh-mselitem.sel{background:var(--gold-dim);color:#1a1207;font-weight:700;}
