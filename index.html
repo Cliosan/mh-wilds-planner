@@ -559,10 +559,10 @@ function Planner({ data, tab, setTab, sync }) {
   if (tab === "compare") return <Compare builds={compareBuilds} filtered={selectedBuilds.length > 0} totalCount={builds.length} del={del} load={(b) => { load(b); setTab("build"); }} goBuild={() => setTab("build")} goInventory={() => setTab("inventory")} clearSel={() => setSelIds([])} />;
   if (tab === "resources") {
     const maps = { pieceById, weaponById, charmById };
-    const groups = selectedBuilds.length
-      ? selectedBuilds.filter(b => b.lo).map(b => ({ key: b.id, title: b.name, grade: b.grade, materials: aggregateMaterials(b.lo, maps) })).filter(g => g.materials.list.length)
-      : (materials.list.length ? [{ key: "current", title: null, grade: null, materials }] : []);
-    return <Resources groups={groups} fromSelection={selectedBuilds.length > 0} owned={owned} setOwned={persistOwned} goBuild={() => setTab("build")} goInventory={() => setTab("inventory")} />;
+    const sources = selectedBuilds.length
+      ? selectedBuilds.filter(b => b.lo).map(b => ({ key: b.id, title: b.name, grade: b.grade, lo: b.lo }))
+      : [{ key: "current", title: null, grade: null, lo }];
+    return <Resources sources={sources} maps={maps} fromSelection={selectedBuilds.length > 0} owned={owned} setOwned={persistOwned} goBuild={() => setTab("build")} goInventory={() => setTab("inventory")} />;
   }
 
   const weapon = weaponById[lo.weapon];
@@ -1089,27 +1089,57 @@ const matDot = (c) => MATCOLOR[(c || "").toLowerCase()] || (c || "#8a7a5a");
 
 // Somma i materiali dell'intera build corrente: arma (intero albero) + pezzi d'armatura + charm
 // (costo cumulativo dei ranghi). I gioielli non sono inclusi: sono drop casuali, non si forgiano.
-function aggregateMaterials(lo, ctx) {
+/* fonti-materiali di un loadout: una voce per ciascun componente equipaggiato che
+   ha un costo di crafting (arma, i cinque pezzi d'armatura, charm). Base comune sia
+   della vista aggregata ("Totale") sia di quella divisa per pezzo. */
+function buildMatSources(lo, ctx) {
   const { pieceById, weaponById, charmById } = ctx;
+  const out = [];
+  const w = weaponById[lo.weapon];
+  if (w && w.id !== "w0") out.push({ owner: "weapon", label: SLOT_LABEL.weapon, icon: "⚔", sub: w.name, mats: w.mats, zenny: w.zenny });
+  for (const s of SLOTS) { const p = pieceById[lo.pieces[s]]; if (p) out.push({ owner: s, label: SLOT_LABEL[s], icon: ICONS[s], sub: p.setName, mats: p.mats, zenny: p.zenny }); }
+  const ch = charmById && charmById[lo.charm];
+  if (ch && lo.charm !== "c0") out.push({ owner: "charm", label: "Charm", icon: "✦", sub: ch.name, mats: ch.mats, zenny: ch.zenny });
+  return out;
+}
+
+/* somma una lista di fonti {mats,zenny} in {list:[{id,name,icon,need}], zenny},
+   accorpando i materiali con lo stesso id (una risorsa comune a più fonti). */
+function accMaterials(entries) {
   const acc = {}; let zenny = 0;
-  const addFrom = (mats, z) => {
-    (mats || []).forEach(m => {
+  (entries || []).forEach(e => {
+    (e.mats || []).forEach(m => {
       if (m.id == null) return;
       if (!acc[m.id]) acc[m.id] = { id: m.id, name: m.name, icon: m.icon || {}, need: 0 };
       acc[m.id].need += m.qty || 0;
     });
-    zenny += z || 0;
-  };
-  const w = weaponById[lo.weapon];
-  if (w && w.id !== "w0") addFrom(w.mats, w.zenny);
-  for (const s of SLOTS) { const p = pieceById[lo.pieces[s]]; if (p) addFrom(p.mats, p.zenny); }
-  const ch = charmById && charmById[lo.charm];
-  if (ch && lo.charm !== "c0") addFrom(ch.mats, ch.zenny);
+    zenny += e.zenny || 0;
+  });
   return { list: Object.values(acc), zenny };
 }
 
-function Resources({ groups, fromSelection, owned, setOwned, goBuild, goInventory }) {
-  if (!groups.length)
+/* materiali complessivi della build (tutti i componenti sommati). */
+function aggregateMaterials(lo, ctx) {
+  return accMaterials(buildMatSources(lo, ctx));
+}
+
+/* materiali divisi per componente: un gruppo per ogni pezzo che richiede crafting.
+   La stessa risorsa può comparire in più gruppi se è comune a più componenti. */
+function materialsByPiece(lo, ctx) {
+  return buildMatSources(lo, ctx)
+    .filter(s => (s.mats || []).length)
+    .map(s => ({ key: s.owner, label: s.label, icon: s.icon, sub: s.sub, materials: accMaterials([s]) }));
+}
+
+function Resources({ sources, maps, fromSelection, owned, setOwned, goBuild, goInventory }) {
+  const [mode, setMode] = useState("piece"); // "piece" = diviso per pezzo · "total" = aggregato
+
+  // per ogni build sorgente: totale complessivo + suddivisione per componente
+  const built = (sources || [])
+    .map(s => ({ ...s, total: aggregateMaterials(s.lo, maps), pieces: materialsByPiece(s.lo, maps) }))
+    .filter(s => s.total.list.length);
+
+  if (!built.length)
     return <div className="mh-compare"><p className="mh-empty big">
       {fromSelection
         ? <>Le build selezionate non hanno un loadout richiamabile. Selezionane altre nell'<button className="mh-link" onClick={goInventory}>Inventario</button> o usa il <button className="mh-link" onClick={goBuild}>Costruttore</button>.</>
@@ -1117,9 +1147,9 @@ function Resources({ groups, fromSelection, owned, setOwned, goBuild, goInventor
     </p></div>;
 
   const setOne = (id, v) => setOwned({ ...owned, [id]: Math.max(0, v | 0) });
-  const multi = groups.length > 1;
-  const totalZenny = groups.reduce((s, g) => s + g.materials.zenny, 0);
-  const allIds = new Set(); groups.forEach(g => g.materials.list.forEach(m => allIds.add(m.id)));
+  const multi = built.length > 1;                          // più build a confronto
+  const totalZenny = built.reduce((s, g) => s + g.total.zenny, 0);
+  const allIds = new Set(); built.forEach(g => g.total.list.forEach(m => allIds.add(m.id)));
   const clearOwned = () => { const next = { ...owned }; allIds.forEach(id => delete next[id]); setOwned(next); };
   const rowsOf = (list) => list.map(m => {
     const have = Math.max(0, owned[m.id] || 0);
@@ -1149,7 +1179,32 @@ function Resources({ groups, fromSelection, owned, setOwned, goBuild, goInventor
     </table></div>
   );
 
-  const single = multi ? null : rowsOf(groups[0].materials.list);
+  // scheda di un gruppo (un componente, o una build in vista Totale) con intestazione + tabella
+  const groupCard = (key, header, mats, nested) => {
+    const rows = rowsOf(mats.list);
+    const dc = rows.filter(r => r.done).length;
+    const pct = rows.length ? Math.round(dc / rows.length * 100) : 0;
+    return (
+      <div className={"mh-matgroup" + (nested ? " nested" : "")} key={key}>
+        <div className="mh-matgroup-h">
+          {header}
+          <span className="mh-matgroup-meta">{dc}/{rows.length} · {pct}% · Zenny {mats.zenny.toLocaleString("it-IT")}</span>
+        </div>
+        {renderTable(rows)}
+      </div>
+    );
+  };
+  const pieceHeader = (p) => (<>
+    <span className="mh-matgroup-ic">{p.icon}</span>
+    <span className="mh-matgroup-name">{p.label}</span>
+    {p.sub && <span className="mh-matgroup-sub">{p.sub}</span>}
+  </>);
+  const buildHeader = (b) => (<>
+    {b.grade && <span className={"mh-grade sm grade-" + b.grade}>{b.grade}</span>}
+    <span className="mh-matgroup-name">{b.title}</span>
+  </>);
+
+  const single = multi ? null : rowsOf(built[0].total.list);
   const singleDone = single ? single.filter(r => r.done).length : 0;
   const singlePct = single && single.length ? Math.round(singleDone / single.length * 100) : 0;
 
@@ -1161,31 +1216,36 @@ function Resources({ groups, fromSelection, owned, setOwned, goBuild, goInventor
               <div className="mh-trk-progbar"><div className="mh-trk-progfill" style={{ width: singlePct + "%" }} /></div>
               <span className="mh-trk-progl">{singleDone}/{single.length} materiali completati · {singlePct}%</span>
             </div>
-          : <div className="mh-trk-prog"><span className="mh-trk-progl">Materiali di <b style={{ color: "var(--gold)" }}>{groups.length}</b> build selezionate — divisi per build.</span></div>}
+          : <div className="mh-trk-prog"><span className="mh-trk-progl">Materiali di <b style={{ color: "var(--gold)" }}>{built.length}</b> build — {mode === "piece" ? "divisi per build e per pezzo" : "divisi per build"}.</span></div>}
         <div className="mh-trk-meta">
+          <div className="mh-seg" role="tablist" aria-label="Raggruppamento materiali">
+            <button className={mode === "piece" ? "on" : ""} onClick={() => setMode("piece")}>Per pezzo</button>
+            <button className={mode === "total" ? "on" : ""} onClick={() => setMode("total")}>Totale</button>
+          </div>
           <span>Zenny {multi ? "totale " : ""}<b>{totalZenny.toLocaleString("it-IT")}</b></span>
           <button className="mh-link" onClick={clearOwned}>azzera posseduti</button>
         </div>
       </div>
-      <p className="mh-trk-note">Include l'intero albero di potenziamento dell'arma, il crafting di ogni pezzo d'armatura e i ranghi del charm. I gioielli sono esclusi (drop casuali). I materiali posseduti sono globali e restano salvati tra le sessioni{multi ? "; una stessa risorsa può servire a più build." : "."}</p>
+      <p className="mh-trk-note">Include l'intero albero di potenziamento dell'arma, il crafting di ogni pezzo d'armatura e i ranghi del charm. I gioielli sono esclusi (drop casuali). I materiali posseduti sono globali e restano salvati tra le sessioni. In vista «Per pezzo» una stessa risorsa può comparire in più componenti: la colonna «Hai» mostra sempre il totale che possiedi.</p>
       {fromSelection && <div className="mh-cselbar" style={{ marginBottom: 14 }}><span>Materiali delle build selezionate nell'Inventario.</span><button className="mh-link" onClick={goInventory}>← Inventario</button></div>}
+
       {multi
-        ? groups.map(g => {
-            const rows = rowsOf(g.materials.list);
-            const dc = rows.filter(r => r.done).length;
-            const pct = rows.length ? Math.round(dc / rows.length * 100) : 0;
-            return (
-              <div className="mh-matgroup" key={g.key}>
-                <div className="mh-matgroup-h">
-                  {g.grade && <span className={"mh-grade sm grade-" + g.grade}>{g.grade}</span>}
-                  <span className="mh-matgroup-name">{g.title}</span>
-                  <span className="mh-matgroup-meta">{dc}/{rows.length} · {pct}% · Zenny {g.materials.zenny.toLocaleString("it-IT")}</span>
+        ? built.map(b => (
+            mode === "total"
+              ? groupCard(b.key, buildHeader(b), b.total)
+              : <div className="mh-matbuildblock" key={b.key}>
+                  <div className="mh-matbuild">
+                    {b.grade && <span className={"mh-grade sm grade-" + b.grade}>{b.grade}</span>}
+                    <span className="mh-matbuild-name">{b.title}</span>
+                    <span className="mh-matbuild-meta">Zenny {b.total.zenny.toLocaleString("it-IT")}</span>
+                  </div>
+                  {b.pieces.map(p => groupCard(b.key + "|" + p.key, pieceHeader(p), p.materials, true))}
                 </div>
-                {renderTable(rows)}
-              </div>
-            );
-          })
-        : renderTable(single)}
+          ))
+        : (mode === "total"
+            ? renderTable(single)
+            : built[0].pieces.map(p => groupCard("current|" + p.key, pieceHeader(p), p.materials)))}
+
       <div className="mh-trk-foot">
         <button className="mh-link" onClick={goBuild}>← Torna al costruttore</button>
         {fromSelection && <button className="mh-link" onClick={goInventory}>Inventario →</button>}
@@ -1879,6 +1939,18 @@ const CSS = `
 .mh-matgroup-h{display:flex;align-items:center;gap:10px;margin:0 0 8px;padding:0 2px;}
 .mh-matgroup-name{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:15px;letter-spacing:.04em;color:var(--bone);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .mh-matgroup-meta{margin-left:auto;flex:none;font-size:11px;color:var(--muted);font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.03em;}
+.mh-matgroup-ic{flex:none;font-size:15px;line-height:1;}
+.mh-matgroup-sub{min-width:0;flex:0 1 auto;font-size:11px;color:var(--muted);font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.02em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.mh-matgroup.nested{margin-left:14px;}
+.mh-matbuildblock{margin-bottom:24px;}
+.mh-matbuild{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding-bottom:7px;border-bottom:2px solid var(--gold-dim);}
+.mh-matbuild-name{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:17px;letter-spacing:.03em;color:var(--gold);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.mh-matbuild-meta{margin-left:auto;flex:none;font-size:11px;color:var(--muted);font-family:'Rajdhani',sans-serif;font-weight:600;}
+.mh-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;}
+.mh-seg button{background:transparent;border:none;border-right:1px solid var(--line);color:var(--muted);padding:6px 12px;font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:.05em;text-transform:uppercase;font-size:11px;cursor:pointer;transition:background .15s,color .15s;}
+.mh-seg button:last-child{border-right:none;}
+.mh-seg button:not(.on):hover{color:var(--bone);background:#241b0f;}
+.mh-seg button.on{color:var(--ink);background:var(--gold);}
 .mh-trk-foot{display:flex;gap:16px;align-items:center;margin-top:8px;}
 `;
 
