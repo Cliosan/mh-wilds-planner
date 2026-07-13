@@ -117,6 +117,44 @@ function effectiveWeapon(w, wmods) {
   return out;
 }
 
+/* ---- potenziamento (Sfere Armatura) + tempra (Trascendenza) --------------
+   Due meccaniche endgame di MH Wilds modellate per pezzo (vivono in lo.amods):
+   • Potenziamento: le Sfere Armatura alzano SOLO la difesa (+2 per livello),
+     non le resistenze. Il livello massimo dipende dalla rarità.
+   • Tempra (Armor Transcendence, HR100+): innalza il tetto dei livelli e, per
+     i pezzi di rarità 5-6, potenzia gli slot per gioielli (R5: +1 a ogni slot;
+     R6: +1 ai primi due, cap 3). Solo High Rank (R5-8) è temprabile.
+   NB: i tetti di R6/R7 pre-tempra non sono documentati con precisione: sono
+   stime coerenti (facili da correggere qui sotto). La difesa pesa poco nel voto. */
+const ARMOR_UP_PER_LVL = 2;                                    // difesa guadagnata per livello
+const ARMOR_MAX_LVL    = { 1:4, 2:6, 3:8, 4:10, 5:20, 6:16, 7:12, 8:10 }; // tetti normali
+const ARMOR_MAX_LVL_TR = { 5:28, 6:22, 7:16, 8:14 };          // tetti dopo la tempra (Trascendenza)
+const canTranscend = (rar) => rar >= 5 && rar <= 8;
+function armorMaxLevel(rar, trans) {
+  const base = ARMOR_MAX_LVL[rar] != null ? ARMOR_MAX_LVL[rar] : (rar >= 5 ? 10 : 0);
+  const tr = ARMOR_MAX_LVL_TR[rar] != null ? ARMOR_MAX_LVL_TR[rar] : base;
+  return trans ? Math.max(base, tr) : base;
+}
+/* slot potenziati dalla tempra: R5 +1 a ogni slot; R6 +1 ai primi due (max 3) */
+function transcendSlots(slots, rar) {
+  const s = (slots || []).slice();
+  if (rar === 5) return s.map(v => Math.min(3, v + 1));
+  if (rar === 6) return s.map((v, i) => (i < 2 ? Math.min(3, v + 1) : v));
+  return s;
+}
+/* copia del pezzo con potenziamento+tempra applicati (difesa e slot effettivi).
+   Non muta l'originale; espone _lvl/_maxLvl/_trans/_defBonus per la UI. */
+function effectivePiece(p, amod) {
+  if (!p) return p;
+  const a = amod || {};
+  const trans = !!a.trans && canTranscend(p.rarity);
+  const maxLvl = armorMaxLevel(p.rarity, trans);
+  const lvl = Math.max(0, Math.min(maxLvl, a.lvl || 0));
+  const slots = trans ? transcendSlots(p.slots, p.rarity) : (p.slots || []).slice();
+  const defBonus = lvl * ARMOR_UP_PER_LVL;
+  return { ...p, def: p.def + defBonus, slots, _lvl: lvl, _maxLvl: maxLvl, _trans: trans, _defBonus: defBonus };
+}
+
 /* ---- riserva minima (se manca sia cache che rete) ------------------------ */
 const SAMPLE = {
   source:"sample",
@@ -452,7 +490,7 @@ function AccountPanel({ sync, onClose }) {
 }
 
 /* ---------------------------- planner ------------------------------------- */
-function emptyLoadout() { return { weapon: "w0", pieces: { head:"", chest:"", arms:"", waist:"", legs:"" }, charm: "c0", decos: {}, wmods: {}, cskills: [] }; }
+function emptyLoadout() { return { weapon: "w0", pieces: { head:"", chest:"", arms:"", waist:"", legs:"" }, charm: "c0", decos: {}, wmods: {}, amods: {}, cskills: [] }; }
 
 function Planner({ data, tab, setTab, sync }) {
   const [lo, setLo] = useState(emptyLoadout);
@@ -518,7 +556,25 @@ function Planner({ data, tab, setTab, sync }) {
   const result = useMemo(() => compute(lo, { pieceById, decoById, charmById, weaponById, skills: data.skills, bonuses: data.bonuses }), [lo, data, pieceById, decoById, charmById, weaponById]);
   const materials = useMemo(() => aggregateMaterials(lo, { pieceById, weaponById, charmById }), [lo, pieceById, weaponById, charmById]);
 
-  const setPiece = (slot, id) => setLo(l => { const decos = {}; Object.keys(l.decos).forEach(k => { if (!k.startsWith(slot + "#")) decos[k] = l.decos[k]; }); return { ...l, pieces: { ...l.pieces, [slot]: id }, decos }; });
+  const setPiece = (slot, id) => setLo(l => { const decos = {}; Object.keys(l.decos).forEach(k => { if (!k.startsWith(slot + "#")) decos[k] = l.decos[k]; }); const amods = { ...(l.amods || {}) }; delete amods[slot]; return { ...l, pieces: { ...l.pieces, [slot]: id }, decos, amods }; });
+  // potenziamento/tempra di un pezzo: aggiorna lo.amods[slot] e scarta i gioielli che non entrano più negli slot effettivi (es. tolta la tempra, gli slot si restringono)
+  const setAmod = (slot, patch) => setLo(l => {
+    const amods = { ...(l.amods || {}) };
+    amods[slot] = { lvl: 0, trans: false, ...(amods[slot] || {}), ...patch };
+    const p = pieceById[l.pieces[slot]];
+    const decos = { ...l.decos };
+    if (p) {
+      const eff = effectivePiece(p, amods[slot]);
+      Object.keys(decos).forEach(k => {
+        if (!k.startsWith(slot + "#")) return;
+        const i = Number(k.split("#")[1]);
+        const size = eff.slots[i];
+        const d = decoById[decos[k]];
+        if (size == null || (d && d.size > size)) delete decos[k];
+      });
+    }
+    return { ...l, amods, decos };
+  });
   const setWeapon = (id) => setLo(l => { const decos = {}; Object.keys(l.decos).forEach(k => { if (!k.startsWith("weapon#")) decos[k] = l.decos[k]; }); return { ...l, weapon: id, decos, wmods: {} }; });
   const setCharm = (id) => setLo(l => ({ ...l, charm: id, cskills: [] }));
   const setDeco = (key, id) => setLo(l => ({ ...l, decos: { ...l.decos, [key]: id } }));
@@ -543,13 +599,13 @@ function Planner({ data, tab, setTab, sync }) {
       weapon: w && w.id !== "w0" ? w.name : null, def: result.def, res: result.res,
       atk: result.atk, aff: result.aff,
       grade: result.score.grade, overall: result.score.overall, offense: result.score.offense, survival: result.score.survival, qol: result.score.qol, efr: result.score.efr,
-      lo: { weapon: lo.weapon, pieces: { ...lo.pieces }, charm: lo.charm, decos: { ...lo.decos }, wmods: { ...(lo.wmods || {}) }, cskills: [...(lo.cskills || [])] },
+      lo: { weapon: lo.weapon, pieces: { ...lo.pieces }, charm: lo.charm, decos: { ...lo.decos }, wmods: { ...(lo.wmods || {}) }, amods: { ...(lo.amods || {}) }, cskills: [...(lo.cskills || [])] },
       skills: result.skills.map(s => ({ name: s.name, level: s.level, cat: s.cat })),
       bonuses: result.activeBonuses.map(b => `${b.name} (${b.have} pz)`) }]);
     setName("");
   };
   const del = (id) => { persist(builds.filter(b => b.id !== id)); setSelIds(s => s.filter(x => x !== id)); };
-  const load = (b) => { if (b.lo) { setLo({ weapon: b.lo.weapon || "w0", pieces: { ...emptyLoadout().pieces, ...b.lo.pieces }, charm: b.lo.charm || "c0", decos: { ...b.lo.decos }, wmods: b.lo.wmods ? { ...b.lo.wmods } : {}, cskills: b.lo.cskills ? [...b.lo.cskills] : [] }); setName(b.name); } };
+  const load = (b) => { if (b.lo) { setLo({ weapon: b.lo.weapon || "w0", pieces: { ...emptyLoadout().pieces, ...b.lo.pieces }, charm: b.lo.charm || "c0", decos: { ...b.lo.decos }, wmods: b.lo.wmods ? { ...b.lo.wmods } : {}, amods: b.lo.amods ? { ...b.lo.amods } : {}, cskills: b.lo.cskills ? [...b.lo.cskills] : [] }); setName(b.name); } };
 
   const toggleSel = (id) => setSelIds(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
   const selectedBuilds = builds.filter(b => selIds.includes(b.id));
@@ -569,7 +625,7 @@ function Planner({ data, tab, setTab, sync }) {
   const weaponEff = effectiveWeapon(weapon, lo.wmods);
   const slotSources = [];
   if (weaponEff && weaponEff.slots.length) slotSources.push({ owner:"weapon", label:"Arma", slots:weaponEff.slots, kind:"weapon" });
-  for (const s of SLOTS) { const p = pieceById[lo.pieces[s]]; if (p) slotSources.push({ owner:s, label:SLOT_LABEL[s], slots:p.slots, kind:"armor" }); }
+  for (const s of SLOTS) { const p = pieceById[lo.pieces[s]]; if (p) { const pe = effectivePiece(p, (lo.amods || {})[s]); slotSources.push({ owner:s, label:SLOT_LABEL[s], slots:pe.slots, kind:"armor" }); } }
 
   return (
     <div className="mh-grid">
@@ -589,12 +645,15 @@ function Planner({ data, tab, setTab, sync }) {
 
         {SLOTS.map(slot => {
           const p = pieceById[lo.pieces[slot]];
+          const amod = (lo.amods || {})[slot];
+          const pe = p ? effectivePiece(p, amod) : null;
           return (
             <div className="mh-slotcard" key={slot}>
               <div className="mh-slotcard-h"><span className="mh-slot-icon">{ICONS[slot]}</span><span className="mh-slot-label">{SLOT_LABEL[slot]}</span>
                 {p && <span className="mh-rank">{rankLabel(p.rank)}</span>}</div>
               <PiecePicker options={piecesBySlot[slot]} value={lo.pieces[slot]} onChange={id => setPiece(slot, id)} data={data} />
-              {p && <PieceSkills piece={p} data={data} />}
+              {p && <PieceSkills piece={pe} data={data} />}
+              {p && <ArmorMods piece={p} amod={amod} onPatch={patch => setAmod(slot, patch)} />}
             </div>
           );
         })}
@@ -751,7 +810,8 @@ function compute(lo, ctx) {
   const raw = {}; const add = (sid, l) => { raw[sid] = (raw[sid] || 0) + l; };
   let def = 0; const res = { f:0,w:0,t:0,i:0,d:0 }; const bonusCount = {};
 
-  for (const s of SLOTS) { const p = pieceById[lo.pieces[s]]; if (!p) continue;
+  for (const s of SLOTS) { const p0 = pieceById[lo.pieces[s]]; if (!p0) continue;
+    const p = effectivePiece(p0, (lo.amods || {})[s]);        // difesa potenziata dal livello/tempra
     def += p.def; ELEM.forEach(([k]) => res[k] += p.res[k]);
     p.skills.forEach(([sid, l]) => add(sid, l));
     p.bonuses.forEach(bid => { bonusCount[bid] = (bonusCount[bid] || 0) + 1; });
@@ -1610,6 +1670,57 @@ function WeaponMods({ data, weapon, wmods, onPatch, onSlots, onSkills }) {
   );
 }
 
+/* Potenziamento (Sfere Armatura) + tempra (Trascendenza) di un pezzo.
+   Lo stato vive in lo.amods[slot] = { lvl, trans }. Pannello collassabile che
+   riassume lo stato da chiuso (es. "Potenziamento · +10 liv. · temprata"). */
+function ArmorMods({ piece, amod, onPatch }) {
+  const [open, setOpen] = useState(false);
+  const a = amod || {};
+  const trans = !!a.trans && canTranscend(piece.rarity);
+  const maxLvl = armorMaxLevel(piece.rarity, trans);
+  const lvl = Math.max(0, Math.min(maxLvl, a.lvl || 0));
+  const eff = effectivePiece(piece, a);
+  const setLvl = (v) => onPatch({ lvl: Math.max(0, Math.min(maxLvl, v)) });
+  const toggleTrans = () => { const nt = !trans; onPatch({ trans: nt, lvl: Math.min(lvl, armorMaxLevel(piece.rarity, nt)) }); };
+  const boostsSlots = piece.rarity === 5 || piece.rarity === 6;
+  const summary = [];
+  if (lvl > 0) summary.push(`+${lvl} liv.`);
+  if (trans) summary.push("temprata");
+  return (
+    <div className="mh-artian mh-armormods">
+      <button className="mh-artian-toggle" onClick={() => setOpen(o => !o)}>
+        {open ? "▾" : "▸"} Potenziamento{summary.length ? " · " + summary.join(" · ") : ""}
+      </button>
+      {open && (
+        <div className="mh-artian-body">
+          <div className="mh-armup">
+            <span className="mh-armup-l">Livello</span>
+            <span className="mh-stepper">
+              <button onClick={() => setLvl(lvl - 1)} disabled={lvl <= 0}>−</button>
+              <b>{lvl}</b><i>/{maxLvl}</i>
+              <button onClick={() => setLvl(lvl + 1)} disabled={lvl >= maxLvl}>+</button>
+            </span>
+            <span className="mh-armup-def">DIF {eff.def}{eff._defBonus ? <em> +{eff._defBonus}</em> : null}</span>
+          </div>
+          {canTranscend(piece.rarity) ? (
+            <label className="mh-transrow">
+              <input type="checkbox" checked={trans} onChange={toggleTrans} />
+              <span className="mh-transname">Tempra <em>(Trascendenza)</em></span>
+              <span className="mh-transnote">
+                {trans
+                  ? `slot ${eff.slots.length ? eff.slots.join("/") : "—"} · cap liv. ${maxLvl}`
+                  : `alza il cap a ${armorMaxLevel(piece.rarity, true)}${boostsSlots ? " e potenzia gli slot" : ""}`}
+              </span>
+            </label>
+          ) : (
+            <p className="mh-transnote mh-transna">Tempra non disponibile per questa rarità.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* =============================== stile ==================================== */
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&display=swap');
@@ -1905,6 +2016,18 @@ const CSS = `
 .mh-artian-grid input,.mh-artian-grid select{background:#0f0b07;border:1px solid var(--line);border-radius:6px;color:var(--bone);padding:7px 8px;font-size:13px;font-family:inherit;width:100%;appearance:none;}
 .mh-artian-grid input:focus,.mh-artian-grid select:focus{outline:2px solid var(--gold);border-color:var(--gold);}
 .mh-artian-grid input:disabled{opacity:.4;}
+.mh-armormods{margin-top:8px;}
+.mh-armup{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;}
+.mh-armup-l{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold-dim);}
+.mh-armup-def{margin-left:auto;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:12px;letter-spacing:.03em;color:#8fae9c;}
+.mh-armup-def em{color:var(--jade);font-style:normal;}
+.mh-transrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;cursor:pointer;font-size:12px;}
+.mh-transrow input{width:15px;height:15px;accent-color:var(--gold);cursor:pointer;flex:none;}
+.mh-transname{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--bone);}
+.mh-transname em{color:var(--gold-dim);font-style:normal;font-size:10px;letter-spacing:.04em;}
+.mh-transnote{font-size:10.5px;color:var(--muted);letter-spacing:.02em;line-height:1.4;}
+.mh-transrow .mh-transnote{margin-left:auto;text-align:right;}
+.mh-transna{margin:0;}
 .mh-trk{max-width:820px;margin:0 auto;padding:0 4px;}
 .mh-trk-head{display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between;margin-bottom:10px;}
 .mh-trk-prog{flex:1;min-width:200px;}
